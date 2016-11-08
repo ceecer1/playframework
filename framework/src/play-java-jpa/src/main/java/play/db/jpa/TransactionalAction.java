@@ -1,29 +1,32 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.db.jpa;
 
-import play.libs.F;
 import play.mvc.*;
 import play.mvc.Http.*;
 
-import javax.persistence.*;
+import javax.inject.Inject;
+import java.util.concurrent.CompletionStage;
 
 /**
  * Wraps an action in am JPA transaction.
  */
 public class TransactionalAction extends Action<Transactional> {
-    
-    public F.Promise<SimpleResult> call(final Context ctx) throws Throwable {
-        return JPA.withTransactionAsync(
+
+    private JPAApi jpaApi;
+
+    @Inject
+    public TransactionalAction(JPAApi jpaApi) {
+        this.jpaApi = jpaApi;
+    }
+
+    public CompletionStage<Result> call(final Context ctx) {
+        return jpaApi.withTransaction(
             configuration.value(),
             configuration.readOnly(),
-            new play.libs.F.Function0<F.Promise<SimpleResult>>() {
-                public F.Promise<SimpleResult> apply() throws Throwable {
-                    return delegate.call(ctx);
-                }
-            }
+            () -> delegate.call(ctx)
         );
     }
-    
+
 }

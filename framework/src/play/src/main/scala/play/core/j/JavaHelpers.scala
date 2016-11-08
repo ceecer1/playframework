@@ -1,42 +1,63 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.core.j
 
-import play.mvc.{ SimpleResult => JSimpleResult }
-import play.mvc.Http.{ Context => JContext, Request => JRequest, Cookies => JCookies, Cookie => JCookie }
+import java.util.Optional
+import java.util.concurrent.CompletionStage
 
-import play.libs.F
+import play.api.{ Configuration, Environment }
+import play.api.http.HttpConfiguration
+import play.api.i18n.{ DefaultLangs, DefaultMessagesApi, Langs, MessagesApi }
+import play.api.libs.typedmap.{ TypedEntry, TypedKey }
+import play.api.mvc._
+import play.core.Execution.Implicits.trampoline
+import play.mvc.Http.{ RequestBody, Context => JContext, Cookie => JCookie, Cookies => JCookies, Request => JRequest, RequestHeader => JRequestHeader, RequestImpl => JRequestImpl }
+import play.mvc.{ Security, Result => JResult }
+
+import scala.collection.JavaConversions
+import scala.collection.JavaConverters._
+import scala.compat.java8.{ FutureConverters, OptionConverters }
 import scala.concurrent.Future
-import play.api.libs.iteratee.Execution.trampoline
-
-class EitherToFEither[A, B]() extends play.libs.F.Function[Either[A, B], play.libs.F.Either[A, B]] {
-
-  def apply(e: Either[A, B]): play.libs.F.Either[A, B] = e.fold(play.libs.F.Either.Left(_), play.libs.F.Either.Right(_))
-
-}
 
 /**
- *
- * provides helper methods that manage java to scala Result and scala to java Context
+ * Provides helper methods that manage Java to Scala Result and Scala to Java Context
  * creation
  */
 trait JavaHelpers {
-  import collection.JavaConverters._
-  import play.api.mvc._
-  import play.mvc.Http.RequestBody
+
+  def attrsToScalaSeq(attrs: java.util.List[TypedEntry[_]]): Seq[TypedEntry[_]] = {
+    JavaConversions.asScalaBuffer(attrs)
+  }
+
+  def cookiesToScalaCookies(cookies: java.lang.Iterable[play.mvc.Http.Cookie]): Seq[Cookie] = {
+    cookies.asScala.toSeq map { c =>
+      Cookie(c.name, c.value,
+        if (c.maxAge == null) None else Some(c.maxAge), c.path, Option(c.domain), c.secure, c.httpOnly)
+    }
+  }
+
+  def cookiesToJavaCookies(cookies: Cookies) = {
+    new JCookies {
+      def get(name: String): JCookie = {
+        cookies.get(name).map(_.asJava).orNull
+      }
+
+      def iterator: java.util.Iterator[JCookie] = {
+        cookies.toIterator.map(_.asJava).asJava
+      }
+    }
+  }
 
   /**
-   * creates a scala result from java context and result objects
+   * Creates a scala result from java context and result objects
    * @param javaContext
    * @param javaResult
    */
-  def createResult(javaContext: JContext, javaResult: JSimpleResult): SimpleResult = {
-    val wResult = javaResult.getWrappedSimpleResult.withHeaders(javaContext.response.getHeaders.asScala.toSeq: _*)
-      .withCookies((javaContext.response.cookies.asScala.toSeq map { c =>
-        Cookie(c.name, c.value,
-          if (c.maxAge == null) None else Some(c.maxAge), c.path, Option(c.domain), c.secure, c.httpOnly)
-      }): _*)
+  def createResult(javaContext: JContext, javaResult: JResult): Result = {
+    val scalaResult = javaResult.asScala
+    val wResult = scalaResult.withHeaders(javaContext.response.getHeaders.asScala.toSeq: _*)
+      .withCookies(cookiesToScalaCookies(javaContext.response.cookies): _*)
 
     if (javaContext.session.isDirty && javaContext.flash.isDirty) {
       wResult.withSession(Session(javaContext.session.asScala.toMap)).flashing(Flash(javaContext.flash.asScala.toMap))
@@ -54,145 +75,80 @@ trait JavaHelpers {
   }
 
   /**
-   * creates a java request (with an empty body) from a scala RequestHeader
-   * @param request incoming requestHeader
+   * Creates a java context from a scala RequestHeader
+   * @param req the scala request
+   * @param components the context components (use JavaHelpers.createContextComponents)
    */
-  def createJavaRequest(req: RequestHeader): JRequest = {
-    new JRequest {
-
-      def uri = req.uri
-
-      def method = req.method
-
-      def version = req.version
-
-      def remoteAddress = req.remoteAddress
-
-      def secure = req.secure
-
-      def host = req.host
-
-      def path = req.path
-
-      def body = null
-
-      def headers = req.headers.toMap.map(e => e._1 -> e._2.toArray).asJava
-
-      def acceptLanguages = req.acceptLanguages.map(new play.i18n.Lang(_)).asJava
-
-      def queryString = {
-        req.queryString.mapValues(_.toArray).asJava
-      }
-
-      def accept = req.accept.asJava
-
-      def acceptedTypes = req.acceptedTypes.asJava
-
-      def accepts(mediaType: String) = req.accepts(mediaType)
-
-      def cookies = new JCookies {
-        def get(name: String): JCookie = {
-          req.cookies.get(name).map(makeJavaCookie).orNull
-        }
-
-        private def makeJavaCookie(cookie: Cookie): JCookie = {
-          new JCookie(cookie.name,
-            cookie.value,
-            cookie.maxAge.map(i => new Integer(i)).orNull,
-            cookie.path,
-            cookie.domain.orNull,
-            cookie.secure,
-            cookie.httpOnly)
-        }
-
-        def iterator: java.util.Iterator[JCookie] = {
-          req.cookies.toIterator.map(makeJavaCookie).asJava
-        }
-      }
-
-      override def toString = req.toString
-
-    }
-  }
-
-  /**
-   * creates a java context from a scala RequestHeader
-   * @param request
-   */
-  def createJavaContext(req: RequestHeader): JContext = {
+  def createJavaContext(req: RequestHeader, components: JavaContextComponents): JContext = {
+    require(components != null, "Null JavaContextComponents")
     new JContext(
       req.id,
       req,
-      createJavaRequest(req),
+      new JRequestImpl(req),
       req.session.data.asJava,
       req.flash.data.asJava,
-      req.tags.mapValues(_.asInstanceOf[AnyRef]).asJava
+      req.tags.mapValues(_.asInstanceOf[AnyRef]).asJava,
+      components
     )
   }
 
   /**
-   * creates a java context from a scala Request[RequestBody]
-   * @param request
+   * Creates a java context from a scala Request[RequestBody]
+   * @param req the scala request
+   * @param components the context components (use JavaHelpers.createContextComponents)
    */
-  def createJavaContext(req: Request[RequestBody]): JContext = {
-    new JContext(req.id, req, new JRequest {
-
-      def uri = req.uri
-
-      def method = req.method
-
-      def version = req.version
-
-      def remoteAddress = req.remoteAddress
-
-      def secure = req.secure
-
-      def host = req.host
-
-      def path = req.path
-
-      def body = req.body
-
-      def headers = req.headers.toMap.map(e => e._1 -> e._2.toArray).asJava
-
-      def acceptLanguages = req.acceptLanguages.map(new play.i18n.Lang(_)).asJava
-
-      def accept = req.accept.asJava
-
-      def acceptedTypes = req.acceptedTypes.asJava
-
-      def accepts(mediaType: String) = req.accepts(mediaType)
-
-      def queryString = {
-        req.queryString.mapValues(_.toArray).asJava
-      }
-
-      def cookies = new JCookies {
-        def get(name: String): JCookie = {
-          req.cookies.get(name).map(makeJavaCookie).orNull
-        }
-
-        private def makeJavaCookie(cookie: Cookie): JCookie = {
-          new JCookie(cookie.name,
-            cookie.value,
-            cookie.maxAge.map(i => new Integer(i)).orNull,
-            cookie.path,
-            cookie.domain.orNull,
-            cookie.secure,
-            cookie.httpOnly)
-        }
-
-        def iterator: java.util.Iterator[JCookie] = {
-          req.cookies.toIterator.map(makeJavaCookie).asJava
-        }
-      }
-
-      override def toString = req.toString
-
-    },
+  def createJavaContext(req: Request[RequestBody], components: JavaContextComponents): JContext = {
+    require(components != null, "Null JavaContextComponents")
+    new JContext(
+      req.id,
+      req,
+      new JRequestImpl(req),
       req.session.data.asJava,
       req.flash.data.asJava,
-      req.tags.mapValues(_.asInstanceOf[AnyRef]).asJava)
+      req.tags.mapValues(_.asInstanceOf[AnyRef]).asJava,
+      components
+    )
+  }
+
+  /**
+   * Creates java context components from environment, using
+   * Configuration.reference and Environment.simple as defaults.
+   *
+   * @return an instance of JavaContextComponents.
+   */
+  def createContextComponents(): JavaContextComponents = {
+    val reference: Configuration = play.api.Configuration.reference
+    val environment = play.api.Environment.simple()
+    createContextComponents(reference, environment)
+  }
+
+  /**
+   * Creates context components from environment.
+   * @param configuration play config.
+   * @param env play environment.
+   * @return an instance of JavaContextComponents with default messagesApi and langs.
+   */
+  def createContextComponents(configuration: Configuration, env: Environment): JavaContextComponents = {
+    val langs = new DefaultLangs(configuration)
+    val messagesApi = new DefaultMessagesApi(env, configuration, langs)
+    val httpConfiguration = HttpConfiguration.fromConfiguration(configuration)
+    createContextComponents(messagesApi, langs, httpConfiguration)
+  }
+
+  /**
+   * Creates JavaContextComponents directly from components..
+   * @param messagesApi the messagesApi instance
+   * @param langs the langs instance
+   * @param httpConfiguration the http configuration
+   * @return an instance of JavaContextComponents with given input components.
+   */
+  def createContextComponents(
+    messagesApi: MessagesApi,
+    langs: Langs,
+    httpConfiguration: HttpConfiguration): JavaContextComponents = {
+    val jMessagesApi = new play.i18n.MessagesApi(messagesApi)
+    val jLangs = new play.i18n.Langs(langs)
+    new DefaultJavaContextComponents(jMessagesApi, jLangs, httpConfiguration)
   }
 
   /**
@@ -201,29 +157,159 @@ trait JavaHelpers {
    * it.
    *
    * This is intended for use by methods in the JavaGlobalSettingsAdapter, which need to be handled
-   * like Java actions, but are not Java actions.
+   * like Java actions, but are not Java actions. In this case, f may return null, so we wrap its
+   * result in an Option. E.g. see the default behavior of GlobalSettings.onError.
    *
    * @param request The request
+   * @param components the context components
    * @param f The function to invoke
    * @return The result
    */
-  def invokeWithContext(request: RequestHeader, f: JRequest => Option[F.Promise[JSimpleResult]]): Option[Future[SimpleResult]] = {
-    val javaContext = createJavaContext(request)
+  def invokeWithContextOpt(request: RequestHeader, components: JavaContextComponents, f: JRequest => CompletionStage[JResult]): Option[Future[Result]] = {
+    val javaContext = createJavaContext(request, components)
     try {
       JContext.current.set(javaContext)
-      f(javaContext.request()).map(_.wrapped.map(createResult(javaContext, _))(trampoline))
+      Option(f(javaContext.request())).map(cs => FutureConverters.toScala(cs).map(createResult(javaContext, _))(trampoline))
     } finally {
       JContext.current.remove()
     }
   }
 
   /**
-   * Creates a partial function from a Java function
+   * Invoke the given function with the right context set, converting the scala request to a
+   * Java request, and converting the resulting Java result to a Scala result, before returning
+   * it.
+   *
+   * This is intended for use by callback methods in Java adapters.
+   *
+   * @param request The request
+   * @param components the context components
+   * @param f The function to invoke
+   * @return The result
    */
-  def toPartialFunction[A, B](f: F.Function[A, B]): PartialFunction[A, B] = new PartialFunction[A, B] {
-    def apply(a: A) = f.apply(a)
-    def isDefinedAt(x: A) = true
+  def invokeWithContext(request: RequestHeader, components: JavaContextComponents, f: JRequest => CompletionStage[JResult]): Future[Result] = {
+    withContext(request, components) { javaContext =>
+      FutureConverters.toScala(f(javaContext.request())).map(createResult(javaContext, _))(trampoline)
+    }
+  }
+
+  /**
+   * Invoke the given block with Java context created from the request header
+   */
+  def withContext[A](request: RequestHeader, components: JavaContextComponents)(block: JContext => A) = {
+    val javaContext = createJavaContext(request, components)
+    try {
+      JContext.current.set(javaContext)
+      block(javaContext)
+    } finally {
+      JContext.current.remove()
+    }
+
   }
 
 }
+
 object JavaHelpers extends JavaHelpers
+
+class RequestHeaderImpl(header: RequestHeader) extends JRequestHeader {
+
+  override def _underlyingHeader: RequestHeader = header
+
+  def uri = header.uri
+
+  def method = header.method
+
+  def version = header.version
+
+  def remoteAddress = header.remoteAddress
+
+  def secure = header.secure
+
+  override def attr[A](key: TypedKey[A]): A = header.attr(key)
+  override def getAttr[A](key: TypedKey[A]): Optional[A] = OptionConverters.toJava(header.getAttr(key))
+  override def containsAttr(key: TypedKey[_]): Boolean = header.containsAttr(key)
+  override def withAttr[A](key: TypedKey[A], value: A): JRequestHeader =
+    new RequestHeaderImpl(header.withAttr(key, value))
+  override def withAttrs(entries: TypedEntry[_]*): JRequestHeader =
+    new RequestHeaderImpl(header.withAttrs(entries: _*))
+
+  def withBody(body: RequestBody): JRequest = new JRequestImpl(header.withBody(body))
+
+  def host = header.host
+
+  def path = header.path
+
+  def headers = createHeaderMap(header.headers)
+
+  def acceptLanguages = header.acceptLanguages.map(new play.i18n.Lang(_)).asJava
+
+  def queryString = {
+    header.queryString.mapValues(_.toArray).asJava
+  }
+
+  def acceptedTypes = header.acceptedTypes.asJava
+
+  def accepts(mediaType: String) = header.accepts(mediaType)
+
+  def cookies = JavaHelpers.cookiesToJavaCookies(header.cookies)
+
+  override def clientCertificateChain() = OptionConverters.toJava(header.clientCertificateChain.map(_.asJava))
+
+  def getQueryString(key: String): String = {
+    if (queryString().containsKey(key) && queryString().get(key).length > 0) queryString().get(key)(0) else null
+  }
+
+  def cookie(name: String): JCookie = {
+    cookies().get(name)
+  }
+
+  def getHeader(headerName: String): String = {
+    val header: Array[String] = headers.get(headerName)
+    if (header == null) null else header(0)
+  }
+
+  def hasHeader(headerName: String): Boolean = {
+    getHeader(headerName) != null
+  }
+
+  def hasBody: Boolean = header.hasBody
+
+  private def createHeaderMap(headers: Headers): java.util.Map[String, Array[String]] = {
+    val map = new java.util.TreeMap[String, Array[String]](play.core.utils.CaseInsensitiveOrdered)
+    map.putAll(headers.toMap.mapValues(_.toArray).asJava)
+    map
+  }
+
+  def contentType() = OptionConverters.toJava(header.contentType)
+
+  def charset() = OptionConverters.toJava(header.charset)
+
+  def tags = header.tags.asJava
+
+  def withTag(name: String, value: String) = header.withTag(name, value)
+
+  override def toString = header.toString
+
+}
+
+class RequestImpl(request: Request[RequestBody]) extends RequestHeaderImpl(request) with JRequest {
+  override def _underlyingRequest: Request[RequestBody] = request
+
+  override def attr[A](key: TypedKey[A]): A = _underlyingHeader.attr(key)
+  override def getAttr[A](key: TypedKey[A]): Optional[A] = OptionConverters.toJava(_underlyingHeader.getAttr(key))
+  override def containsAttr(key: TypedKey[_]): Boolean = _underlyingHeader.containsAttr(key)
+
+  override def withAttr[A](key: TypedKey[A], value: A): JRequest = {
+    new RequestImpl(request.withAttr(key, value))
+  }
+  override def withAttrs(entries: TypedEntry[_]*): JRequest = {
+    new RequestImpl(request.withAttrs(entries: _*))
+  }
+
+  override def body: RequestBody = request.body
+  override def hasBody: Boolean = request.hasBody
+  override def withBody(body: RequestBody): JRequest = new RequestImpl(request.withBody(body))
+
+  override def username: String = getAttr(Security.USERNAME).orElse(null)
+  override def withUsername(username: String): JRequest = withAttr(Security.USERNAME, username)
+}

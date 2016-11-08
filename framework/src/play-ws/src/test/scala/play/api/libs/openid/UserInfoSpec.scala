@@ -1,11 +1,11 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.libs.openid
 
 import org.specs2.mutable.Specification
 
-object UserInfoSpec extends Specification {
+class UserInfoSpec extends Specification {
 
   val claimedId = "http://example.com/openid?id=C123"
   val identity = "http://example.com/openid?id=C123&id"

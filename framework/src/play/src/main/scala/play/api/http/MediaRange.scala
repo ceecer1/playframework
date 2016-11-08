@@ -1,9 +1,9 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.http
 
-import play.api.Play
+import play.api.Logger
 import scala.util.parsing.input.CharSequenceReader
 import scala.util.parsing.combinator.Parsers
 import scala.collection.BitSet
@@ -39,7 +39,8 @@ case class MediaType(mediaType: String, mediaSubType: String, parameters: Seq[(S
  * @param qValue The Q value
  * @param acceptExtensions The accept extensions
  */
-class MediaRange(mediaType: String,
+class MediaRange(
+    mediaType: String,
     mediaSubType: String,
     parameters: Seq[(String, Option[String])],
     val qValue: Option[BigDecimal],
@@ -61,6 +62,8 @@ class MediaRange(mediaType: String,
 
 object MediaType {
 
+  private val logger = Logger(MediaType.getClass)
+
   /**
    * Function and extractor object for parsing media types.
    */
@@ -73,12 +76,12 @@ object MediaType {
       MediaRangeParser.mediaType(new CharSequenceReader(mediaType)) match {
         case MediaRangeParser.Success(mt: MediaType, next) => {
           if (!next.atEnd) {
-            Play.logger.debug("Unable to parse part of media type '" + next.source + "'")
+            logger.debug(s"Unable to parse part of media type '${next.source}'")
           }
           Some(mt)
         }
         case MediaRangeParser.NoSuccess(err, next) => {
-          Play.logger.debug("Unable to parse media type '" + next.source + "'")
+          logger.debug(s"Unable to parse media type '${next.source}'")
           None
         }
       }
@@ -88,17 +91,7 @@ object MediaType {
 
 object MediaRange {
 
-  /**
-   * Convenient factory method to create a MediaRange from its MIME type followed by the type parameters.
-   * {{{
-   *   MediaRange("text/html")
-   *   MediaRange("text/html;level=1")
-   * }}}
-   */
-  @deprecated("Use MediaType.parse function or extractor object instead", "2.2")
-  def apply(mediaRange: String): MediaType = {
-    MediaType.parse(mediaRange).getOrElse(throw new IllegalArgumentException("Unable to parse media range from String " + mediaRange))
-  }
+  private val logger = Logger(this.getClass())
 
   /**
    * Function and extractor object for parsing media ranges.
@@ -108,13 +101,13 @@ object MediaRange {
     def apply(mediaRanges: String): Seq[MediaRange] = {
       MediaRangeParser(new CharSequenceReader(mediaRanges)) match {
         case MediaRangeParser.Success(mrs: List[MediaRange], next) =>
-          if (next.atEnd) {
-            Play.logger.debug("Unable to parse part of media range header '" + next.source + "'")
+          if (!next.atEnd) {
+            logger.debug(s"Unable to parse part of media range header '${next.source}'")
           }
           mrs.sorted
         case MediaRangeParser.NoSuccess(err, _) =>
-          Play.logger.debug("Unable to parse media range header '" + mediaRanges + "': " + err)
-          Nil
+          logger.debug(s"Unable to parse media range header '$mediaRanges': $err")
+          Seq.empty
       }
     }
   }
@@ -166,6 +159,8 @@ object MediaRange {
    */
   private[http] object MediaRangeParser extends Parsers {
 
+    private val logger = Logger(this.getClass())
+
     val separatorChars = "()<>@,;:\\\"/[]?={} \t"
     val separatorBitSet = BitSet(separatorChars.toCharArray.map(_.toInt): _*)
 
@@ -192,7 +187,7 @@ object MediaRange {
 
     def badPart(p: Char => Boolean, msg: => String) = rep1(acceptIf(p)(ignoreErrors)) ^^ {
       case chars =>
-        Play.logger.debug(msg + ": " + charSeqToString(chars))
+        logger.debug(msg + ": " + charSeqToString(chars))
         None
     }
     val badParameter = badPart(c => c != ',' && c != ';', "Bad media type parameter")
@@ -239,14 +234,14 @@ object MediaRange {
         try {
           val qbd = BigDecimal(q)
           if (qbd > 1) {
-            Play.logger.debug("Invalid q value: " + q)
+            logger.debug("Invalid q value: " + q)
             None
           } else {
             Some(BigDecimal(q))
           }
         } catch {
           case _: NumberFormatException =>
-            Play.logger.debug("Invalid q value: " + q)
+            logger.debug("Invalid q value: " + q)
             None
         }
       }

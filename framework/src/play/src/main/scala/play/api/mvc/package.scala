@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api
 
@@ -18,17 +18,5 @@ package play.api
  * }}}
  */
 package object mvc {
-
-  /**
-   * Alias types for Sockets
-   */
-  object Socket {
-
-    /**
-     * A Socket Out
-     */
-    type Out[A] = play.api.libs.iteratee.Iteratee[A, Unit]
-
-  }
 
 }

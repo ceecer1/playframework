@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+# Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
 #
 
 # Default messages
@@ -11,11 +11,16 @@ constraint.max=Maximum value: {0}
 constraint.minLength=Minimum length: {0}
 constraint.maxLength=Maximum length: {0}
 constraint.email=Email
+constraint.pattern=Required pattern: {0}
 
 # --- Formats
 format.date=Date (''{0}'')
 format.numeric=Numeric
 format.real=Real
+format.uuid=UUID
+
+# --- Patterns for Formats
+formats.date=yyyy-MM-dd
 
 # --- Errors
 error.invalid=Invalid value
@@ -32,10 +37,12 @@ error.minLength=Minimum length is {0}
 error.maxLength=Maximum length is {0}
 error.email=Valid email required
 error.pattern=Must satisfy {0}
+error.date=Valid date required
+error.uuid=Valid UUID required
 
 error.expected.date=Date value expected
 error.expected.date.isoformat=Iso date value expected
-error.expected.jodadate.format=Joda date value expected
+error.expected.time=Time value expected
 error.expected.jsarray=Array value expected
 error.expected.jsboolean=Boolean value expected
 error.expected.jsnumber=Number value expected
@@ -43,6 +50,9 @@ error.expected.jsobject=Object value expected
 error.expected.jsstring=String value expected
 error.expected.jsnumberorjsstring=String or number expected
 error.expected.keypathnode=Node value expected
+error.expected.uuid=UUID value expected
+error.expected.validenumvalue=Valid enumeration value expected
+error.expected.enumstring=String value expected
 
 error.path.empty=Empty path
 error.path.missing=Missing path

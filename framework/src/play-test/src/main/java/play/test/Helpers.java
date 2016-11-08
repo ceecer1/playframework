@@ -1,396 +1,427 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.test;
 
+import akka.stream.Materializer;
+import akka.util.ByteString;
+import org.openqa.selenium.WebDriver;
 import play.*;
 
+import play.inject.guice.GuiceApplicationBuilder;
+import play.routing.Router;
+import play.api.test.PlayRunners$;
+import play.core.j.JavaHandler;
+import play.core.j.JavaHandlerComponents;
+import play.core.j.JavaContextComponents;
+import play.http.HttpEntity;
 import play.mvc.*;
 import play.api.test.Helpers$;
 import play.libs.*;
-import play.libs.F.*;
+import play.twirl.api.Content;
 
-import org.openqa.selenium.*;
 import org.openqa.selenium.firefox.*;
 import org.openqa.selenium.htmlunit.*;
-
+import scala.compat.java8.FutureConverters;
+import scala.compat.java8.OptionConverters;
 
 import java.util.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
+import java.util.function.Function;
+
+import static play.mvc.Http.*;
 
 /**
  * Helper functions to run tests.
  */
 public class Helpers implements play.mvc.Http.Status, play.mvc.Http.HeaderNames {
 
+    /**
+     * Default Timeout (milliseconds) for fake requests issued by these Helpers.
+     * This value is determined from System property <b>test.timeout</b>.
+     * The default value is <b>30000</b> (30 seconds).
+     */
+    public static final long DEFAULT_TIMEOUT = Long.getLong("test.timeout", 30000L);
     public static String GET = "GET";
     public static String POST = "POST";
     public static String PUT = "PUT";
     public static String DELETE = "DELETE";
-    public static String HEAD = "HEAD";
 
     // --
-
+    public static String HEAD = "HEAD";
     public static Class<? extends WebDriver> HTMLUNIT = HtmlUnitDriver.class;
     public static Class<? extends WebDriver> FIREFOX = FirefoxDriver.class;
 
     // --
     @SuppressWarnings(value = "unchecked")
-    private static Result invokeHandler(play.api.mvc.Handler handler, FakeRequest fakeRequest) {
-        if(handler instanceof play.core.j.JavaAction) {
-            play.api.mvc.Action action = (play.api.mvc.Action)handler;
-            return wrapScalaResult(action.apply(fakeRequest.getWrappedRequest()));
+    private static Result invokeHandler(play.api.mvc.Handler handler, Request requestBuilder, long timeout) {
+        if (handler instanceof play.api.mvc.Action) {
+            play.api.mvc.Action action = (play.api.mvc.Action) handler;
+            return wrapScalaResult(action.apply(requestBuilder._underlyingRequest()), timeout);
+        } else if (handler instanceof JavaHandler) {
+            final play.api.inject.Injector injector = play.api.Play.current().injector();
+            final JavaHandlerComponents handlerComponents = injector.instanceOf(JavaHandlerComponents.class);
+            return invokeHandler(
+                    ((JavaHandler) handler).withComponents(handlerComponents),
+                    requestBuilder, timeout
+            );
         } else {
             throw new RuntimeException("This is not a JavaAction and can't be invoked this way.");
         }
     }
 
-    private static SimpleResult wrapScalaResult(scala.concurrent.Future<play.api.mvc.SimpleResult> result) {
+    private static Result wrapScalaResult(scala.concurrent.Future<play.api.mvc.Result> result, long timeout) {
         if (result == null) {
             return null;
         } else {
-            final play.api.mvc.SimpleResult simpleResult = new Promise<play.api.mvc.SimpleResult>(result).get(10000);
-            return new SimpleResult() {
-                public play.api.mvc.SimpleResult getWrappedSimpleResult() {
-                    return simpleResult;
+            try {
+                final play.api.mvc.Result scalaResult = FutureConverters.toJava(result).toCompletableFuture().get(timeout, TimeUnit.MILLISECONDS);
+                return scalaResult.asJava();
+            } catch (ExecutionException e) {
+                if (e.getCause() instanceof RuntimeException) {
+                    throw (RuntimeException) e.getCause();
+                } else {
+                    throw new RuntimeException(e.getCause());
                 }
-            };
-        }
-    }
-
-    private static SimpleResult unwrapJavaResult(Result result) {
-        if (result instanceof SimpleResult) {
-            return (SimpleResult) result;
-        } else {
-            return wrapScalaResult(result.getWrappedResult());
+            } catch (InterruptedException | TimeoutException e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
     // --
 
     /**
-     * Call an action method while decorating it with the right @With interceptors.
+     * Calls a Callable which invokes a Controller or some other method with a Context
      */
-    public static Result callAction(HandlerRef actionReference) {
-        return callAction(actionReference, fakeRequest());
-    }
-
-    /**
-     * Call an action method while decorating it with the right @With interceptors.
-     */
-    public static Result callAction(HandlerRef actionReference, FakeRequest fakeRequest) {
-        play.api.mvc.HandlerRef handlerRef = (play.api.mvc.HandlerRef)actionReference;
-        return invokeHandler(handlerRef.handler(), fakeRequest);
+    public static <V> V invokeWithContext(RequestBuilder requestBuilder, JavaContextComponents contextComponents, Callable<V> callable) {
+        try {
+            Context.current.set(new Context(requestBuilder, contextComponents));
+            return callable.call();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        } finally {
+            Context.current.remove();
+        }
     }
 
     /**
      * Build a new GET / fake request.
      */
-    public static FakeRequest fakeRequest() {
-        return new FakeRequest();
+    public static RequestBuilder fakeRequest() {
+        return fakeRequest("GET", "/");
     }
 
     /**
      * Build a new fake request.
      */
-    public static FakeRequest fakeRequest(String method, String uri) {
-        return new FakeRequest(method, uri);
+    public static RequestBuilder fakeRequest(String method, String uri) {
+        return new RequestBuilder().method(method).uri(uri);
     }
 
     /**
-     * Build a new fake application.
+     * Build a new fake request corresponding to a given route call
      */
-    public static FakeApplication fakeApplication() {
-        return new FakeApplication(new java.io.File("."), Helpers.class.getClassLoader(), new HashMap<String,Object>(), new ArrayList<String>(), null);
+    public static RequestBuilder fakeRequest(Call call) {
+        return fakeRequest(call.method(), call.url());
     }
 
     /**
-     * Build a new fake application.
+     * Builds a new fake application, using GuiceApplicationBuilder.
+     *
+     * @return an application from the current path with no additional configuration.
      */
-    public static FakeApplication fakeApplication(GlobalSettings global) {
-        return new FakeApplication(new java.io.File("."), Helpers.class.getClassLoader(), new HashMap<String,Object>(), new ArrayList<String>(), global);
+    public static Application fakeApplication() {
+        return new GuiceApplicationBuilder().build();
     }
 
     /**
-     * A fake Global
+     * Constructs a in-memory (h2) database configuration to add to a fake application.
+     *
+     * @return a map of String containing database config info.
      */
-    public static GlobalSettings fakeGlobal() {
-        return new GlobalSettings();
-    }
-
-    /**
-     * Constructs a in-memory (h2) database configuration to add to a FakeApplication.
-     */
-    public static Map<String,String> inMemoryDatabase() {
+    public static Map<String, String> inMemoryDatabase() {
         return inMemoryDatabase("default");
     }
 
     /**
-     * Constructs a in-memory (h2) database configuration to add to a FakeApplication.
+     * Constructs a in-memory (h2) database configuration to add to a fake application.
+     *
+     * @return a map of String containing database config info.
      */
-    public static Map<String,String> inMemoryDatabase(String name) {
+    public static Map<String, String> inMemoryDatabase(String name) {
         return inMemoryDatabase(name, Collections.<String, String>emptyMap());
     }
 
     /**
-     * Constructs a in-memory (h2) database configuration to add to a FakeApplication.
+     * Constructs a in-memory (h2) database configuration to add to a fake application.
+     *
+     * @return a map of String containing database config info.
      */
-    public static Map<String,String> inMemoryDatabase(String name, Map<String, String> options) {
+    public static Map<String, String> inMemoryDatabase(String name, Map<String, String> options) {
         return Scala.asJava(play.api.test.Helpers.inMemoryDatabase(name, Scala.asScala(options)));
     }
 
     /**
-     * Build a new fake application.
+     * Build a new fake application.  Uses GuiceApplicationBuilder
+     *
+     * @param additionalConfiguration map containing config info for the app.
+     * @return an application from the current path with additional configuration.
      */
-    public static FakeApplication fakeApplication(Map<String, ? extends Object> additionalConfiguration) {
-        return new FakeApplication(new java.io.File("."), Helpers.class.getClassLoader(), additionalConfiguration, new ArrayList<String>(), null);
+    public static Application fakeApplication(Map<String, ? extends Object> additionalConfiguration) {
+        //noinspection unchecked
+        Map<String, Object> conf = (Map<String, Object>) additionalConfiguration;
+        return new GuiceApplicationBuilder().configure(conf).build();
     }
 
     /**
-     * Build a new fake application.
+     * Extracts the content as a {@link akka.util.ByteString}.
+     * <p>
+     * This method is only capable of extracting the content of results with strict entities. To extract the content of
+     * results with streamed entities, use {@link #contentAsBytes(Result, Materializer)}.
+     *
+     * @param result The result to extract the content from.
+     * @return The content of the result as a ByteString.
+     * @throws UnsupportedOperationException if the result does not have a strict entity.
      */
-    public static FakeApplication fakeApplication(Map<String, ? extends Object> additionalConfiguration, GlobalSettings global) {
-        return new FakeApplication(new java.io.File("."), Helpers.class.getClassLoader(), additionalConfiguration, new ArrayList<String>(), global);
-    }
-
-    /**
-     * Build a new fake application.
-     */
-    public static FakeApplication fakeApplication(Map<String, ? extends Object> additionalConfiguration, List<String> additionalPlugin) {
-        return new FakeApplication(new java.io.File("."), Helpers.class.getClassLoader(), additionalConfiguration, additionalPlugin, null);
-    }
-
-
-    /**
-     * Build a new fake application.
-     */
-    public static FakeApplication fakeApplication(Map<String, ? extends Object> additionalConfiguration, List<String> additionalPlugin, GlobalSettings global) {
-        return new FakeApplication(new java.io.File("."), Helpers.class.getClassLoader(), additionalConfiguration, additionalPlugin, global);
-    }
-
-    /**
-     * Build a new fake application.
-     */
-    public static FakeApplication fakeApplication(Map<String, ? extends Object> additionalConfiguration, List<String> additionalPlugins, List<String> withoutPlugins) {
-        return new FakeApplication(new java.io.File("."), Helpers.class.getClassLoader(), additionalConfiguration, additionalPlugins, withoutPlugins, null);
-    }
-
-    /**
-     * Build a new fake application.
-     */
-    public static FakeApplication fakeApplication(Map<String, ? extends Object> additionalConfiguration, List<String> additionalPlugins, List<String> withoutPlugins, GlobalSettings global) {
-        return new FakeApplication(new java.io.File("."), Helpers.class.getClassLoader(), additionalConfiguration, additionalPlugins, withoutPlugins, global);
-    }
-
-    /**
-     * Extracts the Status code of this Result value.
-     */
-    public static int status(Result result) {
-        return unwrapJavaResult(result).getWrappedSimpleResult().header().status();
-    }
-
-    /**
-     * Extracts the Location header of this Result value if this Result is a Redirect.
-     */
-    public static String redirectLocation(Result result) {
-        return header(LOCATION, result);
-    }
-
-    /**
-     * Extracts the Flash values of this Result value.
-     */
-    public static play.mvc.Http.Flash flash(Result result) {
-        return play.core.j.JavaResultExtractor.getFlash(unwrapJavaResult(result));
-    }
-
-    /**
-     * Extracts the Session of this Result value.
-     */
-    public static play.mvc.Http.Session session(Result result) {
-        return play.core.j.JavaResultExtractor.getSession(unwrapJavaResult(result));
-    }
-
-    /**
-     * Extracts a Cookie value from this Result value
-     */
-    public static play.mvc.Http.Cookie cookie(String name, Result result) {
-        return play.core.j.JavaResultExtractor.getCookies(unwrapJavaResult(result)).get(name);
-    }
-
-    /**
-     * Extracts the Cookies (an iterator) from this result value.
-     */
-    public static play.mvc.Http.Cookies cookies(Result result) {
-       return play.core.j.JavaResultExtractor.getCookies(unwrapJavaResult(result));
-    }
-
-    /**
-     * Extracts an Header value of this Result value.
-     */
-    public static String header(String header, Result result) {
-        return play.core.j.JavaResultExtractor.getHeaders(unwrapJavaResult(result)).get(header);
-    }
-
-    /**
-     * Extracts all Headers of this Result value.
-     */
-    public static Map<String,String> headers(Result result) {
-        return play.core.j.JavaResultExtractor.getHeaders(unwrapJavaResult(result));
-    }
-
-    /**
-     * Extracts the Content-Type of this Content value.
-     */
-    public static String contentType(Content content) {
-        return content.contentType();
-    }
-
-    /**
-     * Extracts the Content-Type of this Result value.
-     */
-    public static String contentType(Result result) {
-        String h = header(CONTENT_TYPE, result);
-        if(h == null) return null;
-        if(h.contains(";")) {
-            return h.substring(0, h.indexOf(";")).trim();
+    public static ByteString contentAsBytes(Result result) {
+        if (result.body() instanceof HttpEntity.Strict) {
+            return ((HttpEntity.Strict) result.body()).data();
         } else {
-            return h.trim();
+            throw new UnsupportedOperationException("Tried to extract body from a non strict HTTP entity without a materializer, use the version of this method that accepts a materializer instead");
         }
     }
 
     /**
-     * Extracts the Charset of this Result value.
+     * Extracts the content as a {@link akka.util.ByteString}.
+     *
+     * @param result The result to extract the content from.
+     * @param mat    The materializer to use to extract the body from the result stream.
+     * @return The content of the result as a ByteString.
      */
-    public static String charset(Result result) {
-        String h = header(CONTENT_TYPE, result);
-        if(h == null) return null;
-        if(h.contains("; charset=")) {
-            return h.substring(h.indexOf("; charset=") + 10, h.length()).trim();
-        } else {
-            return null;
+    public static ByteString contentAsBytes(Result result, Materializer mat) {
+        return contentAsBytes(result, mat, DEFAULT_TIMEOUT);
+    }
+
+    /**
+     * Extracts the content as a {@link akka.util.ByteString}.
+     *
+     * @param result  The result to extract the content from.
+     * @param mat     The materializer to use to extract the body from the result stream.
+     * @param timeout The amount of time, in milliseconds, to wait for the body to be produced.
+     * @return The content of the result as a ByteString.
+     */
+    public static ByteString contentAsBytes(Result result, Materializer mat, long timeout) {
+        try {
+            return result.body().consumeData(mat).thenApply(Function.identity()).toCompletableFuture().get(timeout, TimeUnit.MILLISECONDS);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 
     /**
      * Extracts the content as bytes.
+     *
+     * @param content the content to be turned into bytes.
+     * @return the body of the content as a byte string.
      */
-    public static byte[] contentAsBytes(Result result) {
-        return play.core.j.JavaResultExtractor.getBody(unwrapJavaResult(result));
+    public static ByteString contentAsBytes(Content content) {
+        return ByteString.fromString(content.body());
     }
 
     /**
-     * Extracts the content as bytes.
-     */
-    public static byte[] contentAsBytes(Content content) {
-        return content.body().getBytes();
-    }
-
-    /**
-     * Extracts the content as String.
+     * Extracts the content as a String.
+     *
+     * @param content the content.
+     * @return the body of the content as a String.
      */
     public static String contentAsString(Content content) {
         return content.body();
     }
 
     /**
-     * Extracts the content as String.
+     * Extracts the content as a String.
+     * <p>
+     * This method is only capable of extracting the content of results with strict entities. To extract the content of
+     * results with streamed entities, use {@link #contentAsString(Result, Materializer)}.
+     *
+     * @param result The result to extract the content from.
+     * @return The content of the result as a String.
+     * @throws UnsupportedOperationException if the result does not have a strict entity.
      */
     public static String contentAsString(Result result) {
-        try {
-            String charset = charset(result);
-            if(charset == null) {
-                charset = "utf-8";
-            }
-            return new String(contentAsBytes(result), charset);
-        } catch(RuntimeException e) {
-            throw e;
-        } catch(Throwable t) {
-            throw new RuntimeException(t);
-        }
+        return contentAsBytes(result)
+                .decodeString(result.charset().orElse("utf-8"));
     }
 
     /**
-     * Use the Router to determine the Action to call for this request and executes it.
-     * @deprecated
-     * @see #route instead
+     * Extracts the content as a String.
+     *
+     * @param result The result to extract the content from.
+     * @param mat    The materializer to use to extract the body from the result stream.
+     * @return The content of the result as a String.
      */
+    public static String contentAsString(Result result, Materializer mat) {
+        return contentAsBytes(result, mat, DEFAULT_TIMEOUT)
+                .decodeString(result.charset().orElse("utf-8"));
+    }
+
+    /**
+     * Extracts the content as a String.
+     *
+     * @param result  The result to extract the content from.
+     * @param mat     The materializer to use to extract the body from the result stream.
+     * @param timeout The amount of time, in milliseconds, to wait for the body to be produced.
+     * @return The content of the result as a String.
+     */
+    public static String contentAsString(Result result, Materializer mat, long timeout) {
+        return contentAsBytes(result, mat, timeout)
+                .decodeString(result.charset().orElse("utf-8"));
+    }
+
     @SuppressWarnings(value = "unchecked")
-    public static Result routeAndCall(FakeRequest fakeRequest) {
+    public static Result routeAndCall(RequestBuilder requestBuilder, long timeout) {
         try {
-            return routeAndCall((Class<? extends play.core.Router.Routes>)FakeRequest.class.getClassLoader().loadClass("Routes"), fakeRequest);
-        } catch(RuntimeException e) {
+            return routeAndCall((Class<? extends Router>) RequestBuilder.class.getClassLoader().loadClass("Routes"), requestBuilder, timeout);
+        } catch (RuntimeException e) {
             throw e;
-        } catch(Throwable t) {
+        } catch (Throwable t) {
             throw new RuntimeException(t);
         }
     }
 
-    /**
-     * Use the Router to determine the Action to call for this request and executes it.
-     * @deprecated
-     * @see #route instead
-     */
-    public static Result routeAndCall(Class<? extends play.core.Router.Routes> router, FakeRequest fakeRequest) {
+    public static Result routeAndCall(Class<? extends Router> router, RequestBuilder requestBuilder, long timeout) {
         try {
-            play.core.Router.Routes routes = (play.core.Router.Routes)router.getClassLoader().loadClass(router.getName() + "$").getDeclaredField("MODULE$").get(null);
-            if(routes.routes().isDefinedAt(fakeRequest.getWrappedRequest())) {
-                return invokeHandler(routes.routes().apply(fakeRequest.getWrappedRequest()), fakeRequest);
-            } else {
-                return null;
-            }
-        } catch(RuntimeException e) {
+            Request request = requestBuilder.build();
+            Router routes = (Router) router.getClassLoader().loadClass(router.getName() + "$").getDeclaredField("MODULE$").get(null);
+            return routes.route(request).map(handler ->
+                    invokeHandler(handler, request, timeout)
+            ).orElse(null);
+        } catch (RuntimeException e) {
             throw e;
-        } catch(Throwable t) {
+        } catch (Throwable t) {
             throw new RuntimeException(t);
         }
     }
 
-    public static Result route(FakeRequest fakeRequest) {
-      return route(play.Play.application(), fakeRequest);
+    public static Result routeAndCall(Router router, RequestBuilder requestBuilder) {
+        return routeAndCall(router, requestBuilder, DEFAULT_TIMEOUT);
     }
 
-    public static Result route(Application app, FakeRequest fakeRequest) {
-      final scala.Option<scala.concurrent.Future<play.api.mvc.SimpleResult>> opt = play.api.test.Helpers.jRoute(app.getWrappedApplication(), fakeRequest.fake);
-      return wrapScalaResult(Scala.orNull(opt));
+    public static Result routeAndCall(Router router, RequestBuilder requestBuilder, long timeout) {
+        try {
+            Request request = requestBuilder.build();
+            return router.route(request).map(handler ->
+                    invokeHandler(handler, request, timeout)
+            ).orElse(null);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new RuntimeException(t);
+        }
     }
 
-    public static Result route(Application app, FakeRequest fakeRequest, byte[] body) {
-      return wrapScalaResult(Scala.orNull(play.api.test.Helpers.jRoute(app.getWrappedApplication(), fakeRequest.getWrappedRequest(), body)));
+    public static Result route(Call call) {
+        return route(fakeRequest(call));
     }
 
-    public static Result route(FakeRequest fakeRequest, byte[] body) {
-      return route(play.Play.application(), fakeRequest, body);
+    public static Result route(Call call, long timeout) {
+        return route(fakeRequest(call), timeout);
+    }
+
+    public static Result route(Application app, Call call) {
+        return route(app, fakeRequest(call));
+    }
+
+    public static Result route(Application app, Call call, long timeout) {
+        return route(app, fakeRequest(call), timeout);
+    }
+
+    public static Result route(RequestBuilder requestBuilder) {
+        return route(requestBuilder, DEFAULT_TIMEOUT);
+    }
+
+    public static Result route(RequestBuilder requestBuilder, long timeout) {
+        final play.Application application = play.api.Play.current().injector().instanceOf(play.Application.class);
+
+        return route(application, requestBuilder, timeout);
+    }
+
+    public static Result route(Application app, RequestBuilder requestBuilder) {
+        return route(app, requestBuilder, DEFAULT_TIMEOUT);
+    }
+
+    @SuppressWarnings("unchecked")
+    public static Result route(Application app, RequestBuilder requestBuilder, long timeout) {
+        final scala.Option<scala.concurrent.Future<play.api.mvc.Result>> opt = play.api.test.Helpers.jRoute(
+                app.getWrappedApplication(), requestBuilder.build()._underlyingRequest(), requestBuilder.body());
+        return wrapScalaResult(Scala.orNull(opt), timeout);
     }
 
     /**
      * Starts a new application.
+     *
+     * @param application the application to start.
      */
-    public static void start(FakeApplication fakeApplication) {
-
-        play.api.Play.start(fakeApplication.getWrappedApplication());
+    public static void start(Application application) {
+        play.api.Play.start(application.getWrappedApplication());
     }
 
     /**
      * Stops an application.
+     *
+     * @param application the application to stop.
      */
-    public static void stop(FakeApplication fakeApplication) {
-        play.api.Play.stop();
+    public static void stop(Application application) {
+        play.api.Play.stop(application.getWrappedApplication());
     }
 
     /**
      * Executes a block of code in a running application.
+     *
+     * @param application the application context.
      */
-    public static synchronized void running(FakeApplication fakeApplication, final Runnable block) {
-        try {
-            start(fakeApplication);
-            block.run();
-        } finally {
-            stop(fakeApplication);
+    public static void running(Application application, final Runnable block) {
+        synchronized (PlayRunners$.MODULE$.mutex()) {
+            try {
+                start(application);
+                block.run();
+            } finally {
+                stop(application);
+            }
         }
     }
 
 
     /**
+     * Creates a new Test server listening on port defined by configuration setting "testserver.port" (defaults to 19001).
+     *
+     * @return the test server.
+     */
+    public static TestServer testServer() {
+        return testServer(play.api.test.Helpers.testServerPort());
+    }
+
+    /**
+     * Creates a new Test server listening on port defined by configuration setting "testserver.port" (defaults to 19001) and using the given Application.
+     *
+     * @param app the application.
+     * @return the test server.
+     */
+    public static TestServer testServer(Application app) {
+        return testServer(play.api.test.Helpers.testServerPort(), app);
+    }
+
+    /**
      * Creates a new Test server.
+     *
+     * @return the test server.
      */
     public static TestServer testServer(int port) {
         return new TestServer(port, fakeApplication());
@@ -398,8 +429,10 @@ public class Helpers implements play.mvc.Http.Status, play.mvc.Http.HeaderNames 
 
     /**
      * Creates a new Test server.
+     *
+     * @return the test server.
      */
-    public static TestServer testServer(int port, FakeApplication app) {
+    public static TestServer testServer(int port, Application app) {
         return new TestServer(port, app);
     }
 
@@ -420,51 +453,59 @@ public class Helpers implements play.mvc.Http.Status, play.mvc.Http.HeaderNames 
     /**
      * Executes a block of code in a running server.
      */
-    public static synchronized void running(TestServer server, final Runnable block) {
-        try {
-            start(server);
-            block.run();
-        } finally {
-            stop(server);
+    public static void running(TestServer server, final Runnable block) {
+        synchronized (PlayRunners$.MODULE$.mutex()) {
+            try {
+                start(server);
+                block.run();
+            } finally {
+                stop(server);
+            }
         }
     }
 
     /**
      * Executes a block of code in a running server, with a test browser.
+     *
+     * @param server    the test server.
+     * @param webDriver the web driver class.
+     * @param block     the block of code to execute.
      */
-    public static synchronized void running(TestServer server, Class<? extends WebDriver> webDriver, final Callback<TestBrowser> block) {
+    public static void running(TestServer server, Class<? extends WebDriver> webDriver, final Consumer<TestBrowser> block) {
         running(server, play.api.test.WebDriverFactory.apply(webDriver), block);
     }
 
     /**
      * Executes a block of code in a running server, with a test browser.
+     *
+     * @param server    the test server.
+     * @param webDriver the web driver instance.
+     * @param block     the block of code to execute.
      */
-    public static synchronized void running(TestServer server, WebDriver webDriver, final Callback<TestBrowser> block) {
-        TestBrowser browser = null;
-        TestServer startedServer = null;
-        try {
-            start(server);
-            startedServer = server;
-            browser = testBrowser(webDriver);
-            block.invoke(browser);
-        } catch(Error e) {
-            throw e;
-        } catch(RuntimeException re) {
-            throw re;
-        } catch(Throwable t) {
-            throw new RuntimeException(t);
-        } finally {
-            if(browser != null) {
-                browser.quit();
-            }
-            if(startedServer != null) {
-                stop(startedServer);
+    public static void running(TestServer server, WebDriver webDriver, final Consumer<TestBrowser> block) {
+        synchronized (PlayRunners$.MODULE$.mutex()) {
+            TestBrowser browser = null;
+            TestServer startedServer = null;
+            try {
+                start(server);
+                startedServer = server;
+                browser = testBrowser(webDriver, (Integer) OptionConverters.toJava(server.config().port()).get());
+                block.accept(browser);
+            } finally {
+                if (browser != null) {
+                    browser.quit();
+                }
+                if (startedServer != null) {
+                    stop(startedServer);
+                }
             }
         }
     }
 
     /**
      * Creates a Test Browser.
+     *
+     * @return the test browser.
      */
     public static TestBrowser testBrowser() {
         return testBrowser(HTMLUNIT);
@@ -472,6 +513,8 @@ public class Helpers implements play.mvc.Http.Status, play.mvc.Http.HeaderNames 
 
     /**
      * Creates a Test Browser.
+     *
+     * @return the test browser.
      */
     public static TestBrowser testBrowser(int port) {
         return testBrowser(HTMLUNIT, port);
@@ -479,6 +522,8 @@ public class Helpers implements play.mvc.Http.Status, play.mvc.Http.HeaderNames 
 
     /**
      * Creates a Test Browser.
+     *
+     * @return the test browser.
      */
     public static TestBrowser testBrowser(Class<? extends WebDriver> webDriver) {
         return testBrowser(webDriver, Helpers$.MODULE$.testServerPort());
@@ -486,19 +531,23 @@ public class Helpers implements play.mvc.Http.Status, play.mvc.Http.HeaderNames 
 
     /**
      * Creates a Test Browser.
+     *
+     * @return the test browser.
      */
     public static TestBrowser testBrowser(Class<? extends WebDriver> webDriver, int port) {
         try {
             return new TestBrowser(webDriver, "http://localhost:" + port);
-        } catch(RuntimeException e) {
+        } catch (RuntimeException e) {
             throw e;
-        } catch(Throwable t) {
+        } catch (Throwable t) {
             throw new RuntimeException(t);
         }
     }
 
     /**
      * Creates a Test Browser.
+     *
+     * @return the test browser.
      */
     public static TestBrowser testBrowser(WebDriver of, int port) {
         return new TestBrowser(of, "http://localhost:" + port);
@@ -506,9 +555,10 @@ public class Helpers implements play.mvc.Http.Status, play.mvc.Http.HeaderNames 
 
     /**
      * Creates a Test Browser.
+     *
+     * @return the test browser.
      */
     public static TestBrowser testBrowser(WebDriver of) {
         return testBrowser(of, Helpers$.MODULE$.testServerPort());
     }
-
 }

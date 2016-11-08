@@ -1,7 +1,10 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.libs
+
+import java.util.Locale
+import play.api.Configuration
 
 /**
  * MIME type utilities.
@@ -14,7 +17,7 @@ object MimeTypes {
    * @param ext the file extension, e.g. `txt`
    * @return the MIME type, if defined
    */
-  def forExtension(ext: String): Option[String] = types.get(ext)
+  def forExtension(ext: String): Option[String] = types.get(ext.toLowerCase(Locale.ENGLISH))
 
   /**
    * Retrieves the usual MIME type for a given file name
@@ -22,20 +25,17 @@ object MimeTypes {
    * @param name the file name, e.g. `hello.txt`
    * @return the MIME type, if defined
    */
-  def forFileName(name: String) = name.split('.').takeRight(1).headOption.flatMap(forExtension(_))
+  def forFileName(name: String): Option[String] = name.split('.').takeRight(1).headOption.flatMap(forExtension(_))
 
   def types: Map[String, String] = defaultTypes ++ applicationTypes
 
   /**
    * Mimetypes defined in the current application, as declared in application.conf
    */
-  def applicationTypes: Map[String, String] = play.api.Play.maybeApplication.flatMap { application =>
-    application.configuration.getConfig("mimetype").map { config =>
+  def applicationTypes: Map[String, String] = play.api.Play.privateMaybeApplication.flatMap { application =>
+    application.configuration.getOptional[Configuration]("mimetype").map { config =>
       config.subKeys.map { key =>
-        (key, config.getString(key))
-      }.collect {
-        case ((key, Some(value))) =>
-          (key, value)
+        key -> config.get[String](key)
       }.toMap
     }
   }.getOrElse(Map.empty)
@@ -382,7 +382,7 @@ object MimeTypes {
         pvu=paleovu/x-pv
         pwz=application/vndms-powerpoint
         py=text/x-scriptphyton
-        pyc=applicaiton/x-bytecodepython
+        pyc=application/x-bytecodepython
         qcp=audio/vndqcelp
         qd3=x-world/x-3dmf
         qd3d=x-world/x-3dmf
@@ -410,8 +410,8 @@ object MimeTypes {
         rp=image/vndrn-realpix
         rpm=audio/x-pn-realaudio-plugin
         rt=text/vndrn-realtext
-        rtf=text/richtext
-        rtx=text/richtext
+        rtf=application/rtf
+        rtx=application/rtx
         rv=video/vndrn-realvideo
         s=text/x-asm
         s3m=audio/s3m
@@ -519,6 +519,7 @@ object MimeTypes {
         wb1=application/x-qpro
         wbmp=image/vnd.wap.wbmp
         web=application/vndxara
+        webm=video/webm
         wiz=application/msword
         wk1=application/x-123
         wmf=windows/metafile
@@ -527,6 +528,7 @@ object MimeTypes {
         wmls=text/vnd.wap.wmlscript
         wmlsc=application/vnd.wap.wmlscriptc
         woff=application/font-woff
+        woff2=application/font-woff2
         word=application/msword
         wp5=application/wordperfect
         wp6=application/wordperfect

@@ -1,10 +1,9 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.libs.json
 
 import play.api.data.validation.ValidationError
-import Json._
 
 trait ConstraintFormat {
   def of[A](implicit fmt: Format[A]): Format[A] = fmt
@@ -19,10 +18,6 @@ trait PathFormat {
   def at[A](path: JsPath)(implicit f: Format[A]): OFormat[A] =
     OFormat[A](Reads.at(path)(f), Writes.at(path)(f))
 
-  @deprecated("use nullable[T] instead", since = "2.1-RC2")
-  def optional[A](path: JsPath)(implicit f: Format[A]): OFormat[Option[A]] =
-    OFormat(Reads.optional(path)(f), Writes.optional(path)(f))
-
   def nullable[A](path: JsPath)(implicit f: Format[A]): OFormat[Option[A]] =
     OFormat(Reads.nullable(path)(f), Writes.nullable(path)(f))
 
@@ -34,15 +29,6 @@ trait PathReads {
 
   def at[A](path: JsPath)(implicit reads: Reads[A]): Reads[A] =
     Reads[A](js => path.asSingleJsResult(js).flatMap(reads.reads(_).repath(path)))
-
-  /**
-   * Reads optional field at JsPath.
-   * If JsPath is not found => None
-   * If JsPath is found => applies implicit Reads[T]
-   */
-  @deprecated("use nullable[T] instead", since = "2.1-RC2")
-  def optional[A](path: JsPath)(implicit reads: Reads[A]): Reads[Option[A]] =
-    Reads[Option[A]](json => path.asSingleJsResult(json).fold(_ => JsSuccess(None), a => reads.reads(a).repath(path).map(Some(_))))
 
   /**
    * Reads a Option[T] search optional or nullable field at JsPath (field not found or null is None
@@ -116,24 +102,24 @@ trait ConstraintReads {
   def map[A](implicit reads: Reads[A]): Reads[collection.immutable.Map[String, A]] = Reads.mapReads[A]
 
   /**
-   * Defines a minimum value for a numeric Reads. Combine with `max` using `or`, e.g.
-   * `.read(Reads.min(0) or Reads.max(100))`.
+   * Defines a minimum value for a Reads. Combine with `max` using `andKeep`, e.g.
+   * `.read(Reads.min(0) andKeep Reads.max(100))`.
    */
-  def min[N](m: N)(implicit reads: Reads[N], num: Numeric[N]) =
-    filterNot[N](ValidationError("error.min", m))(num.lt(_, m))(reads)
+  def min[O](m: O)(implicit reads: Reads[O], ord: Ordering[O]) =
+    filterNot[O](ValidationError("error.min", m))(ord.lt(_, m))(reads)
 
   /**
-   * Defines a maximum value for a numeric Reads. Combine with `min` using `or`, e.g.
-   * `.read(Reads.min(0.1) or Reads.max(1.0))`.
+   * Defines a maximum value for a Reads. Combine with `min` using `andKeep`, e.g.
+   * `.read(Reads.min(0.1) andKeep Reads.max(1.0))`.
    */
-  def max[N](m: N)(implicit reads: Reads[N], num: Numeric[N]) =
-    filterNot[N](ValidationError("error.max", m))(num.gt(_, m))(reads)
+  def max[O](m: O)(implicit reads: Reads[O], ord: Ordering[O]) =
+    filterNot[O](ValidationError("error.max", m))(ord.gt(_, m))(reads)
 
   def filterNot[A](error: ValidationError)(p: A => Boolean)(implicit reads: Reads[A]) =
-    Reads[A](js => reads.reads(js).filterNot(error)(p))
+    Reads[A](js => reads.reads(js).filterNot(JsError(error))(p))
 
   def filter[A](otherwise: ValidationError)(p: A => Boolean)(implicit reads: Reads[A]) =
-    Reads[A](js => reads.reads(js).filter(otherwise)(p))
+    Reads[A](js => reads.reads(js).filter(JsError(otherwise))(p))
 
   def minLength[M](m: Int)(implicit reads: Reads[M], p: M => scala.collection.TraversableLike[_, M]) =
     filterNot[M](ValidationError("error.minLength", m))(_.size < m)
@@ -150,7 +136,7 @@ trait ConstraintReads {
     })
 
   def email(implicit reads: Reads[String]): Reads[String] =
-    pattern("""\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}\b""".r, "error.email")
+    pattern("""^[a-zA-Z0-9\.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$""".r, "error.email")
 
   def verifying[A](cond: A => Boolean)(implicit rds: Reads[A]) =
     filter[A](ValidationError("error.invalid"))(cond)(rds)
@@ -172,15 +158,6 @@ trait ConstraintReads {
 trait PathWrites {
   def at[A](path: JsPath)(implicit wrs: Writes[A]): OWrites[A] =
     OWrites[A] { a => JsPath.createObj(path -> wrs.writes(a)) }
-
-  @deprecated("use nullable[T] instead (in parallel with Reads.nullable(path))", since = "2.1-RC2") /** writes a optional field in given JsPath : if None, doesn't write field at all. */
-  def optional[A](path: JsPath)(implicit wrs: Writes[A]): OWrites[Option[A]] =
-    OWrites[Option[A]] { a =>
-      a match {
-        case Some(a) => JsPath.createObj(path -> wrs.writes(a))
-        case None => Json.obj()
-      }
-    }
 
   /**
    * writes a optional field in given JsPath : if None, doesn't write field at all.
@@ -226,7 +203,7 @@ trait ConstraintWrites {
     Writes[JsValue] { js => wrs.writes(fixed) }
 
   def pruned[A](implicit w: Writes[A]): Writes[A] = new Writes[A] {
-    def writes(a: A): JsValue = JsUndefined("pruned")
+    def writes(a: A): JsValue = JsNull
   }
 
   def list[A](implicit writes: Writes[A]): Writes[List[A]] = Writes.traversableWrites[A]
@@ -236,7 +213,7 @@ trait ConstraintWrites {
 
   /**
    * Pure Option Writer[T] which writes "null" when None which is different
-   * from `JsPath.writeNullable which omits the field when None
+   * from `JsPath.writeNullable` which omits the field when None
    */
   def optionWithNull[A](implicit wa: Writes[A]) = Writes[Option[A]] { a =>
     a match {

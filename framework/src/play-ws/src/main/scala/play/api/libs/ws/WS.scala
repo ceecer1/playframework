@@ -1,619 +1,436 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.libs.ws
 
-import collection.immutable.TreeMap
-
-import scala.concurrent.{ Future, Promise }
-
+import java.io.Closeable
 import java.io.File
-import java.util.concurrent.atomic.AtomicReference
-
-import play.api.http.{ Writeable, ContentTypeOf }
-import play.api.libs.iteratee._
-import play.api.libs.iteratee.Input.El
-
-import play.core.utils.CaseInsensitiveOrdered
-import play.core.Execution.Implicits.internalContext
-import play.api.{ Application, Plugin, Play }
-
-import com.ning.http.client.{ Response => AHCResponse, Cookie => AHCCookie, ProxyServer => AHCProxyServer, _ }
-
-import com.ning.http.util.AsyncHttpProviderUtils
+import java.net.URI
+import scala.concurrent.Future
+import scala.concurrent.duration.Duration
+import scala.xml.Elem
+import akka.stream.scaladsl.Source
+import akka.util.ByteString
+import play.api.Application
+import play.api.http.Writeable
+import play.api.libs.json.JsValue
+import play.core.formatters.Multipart
+import play.api.mvc.MultipartFormData
+import java.io.IOException
 
 /**
- * Asynchronous API to to query web services, as an http client.
- *
- * Usage example:
- * {{{
- * WS.url("http://example.com/feed").get()
- * WS.url("http://example.com/item").post("content")
- * }}}
- *
- * The value returned is a Future[Response],
- * and you should use Play's asynchronous mechanisms to use this response.
+ * The WSClient holds the configuration information needed to build a request, and provides a way to get a request holder.
+ */
+trait WSClient extends Closeable {
+
+  /**
+   * The underlying implementation of the client, if any.  You must cast explicitly to the type you want.
+   * @tparam T the type you are expecting (i.e. isInstanceOf)
+   * @return the backing class.
+   */
+  def underlying[T]: T
+
+  /**
+   * Generates a request holder which can be used to build requests.
+   *
+   * @param url The base URL to make HTTP requests to.
+   * @return a WSRequestHolder
+   */
+  def url(url: String): WSRequest
+
+  /** Closes this client, and releases underlying resources. */
+  @throws[IOException] def close(): Unit
+}
+
+trait WSRequestExecutor {
+  def execute(request: WSRequest): Future[WSResponse]
+}
+
+trait WSRequestFilter {
+  def apply(next: WSRequestExecutor): WSRequestExecutor
+}
+
+/**
+ * The base WS API trait.
+ */
+trait WSAPI {
+
+  def client: WSClient
+
+  def url(url: String): WSRequest
+}
+
+/**
  *
  */
-object WS {
-
-  import com.ning.http.client.Realm.{ AuthScheme, RealmBuilder }
-  import javax.net.ssl.SSLContext
-
-  private val clientHolder: AtomicReference[Option[AsyncHttpClient]] = new AtomicReference(None)
-
-  private[play] def newClient(): AsyncHttpClient = {
-    val playConfig = play.api.Play.maybeApplication.map(_.configuration)
-    val asyncHttpConfig = new AsyncHttpClientConfig.Builder()
-      .setConnectionTimeoutInMs(playConfig.flatMap(_.getMilliseconds("ws.timeout.connection")).getOrElse(120000L).toInt)
-      .setIdleConnectionTimeoutInMs(playConfig.flatMap(_.getMilliseconds("ws.timeout.idle")).getOrElse(120000L).toInt)
-      .setRequestTimeoutInMs(playConfig.flatMap(_.getMilliseconds("ws.timeout.request")).getOrElse(120000L).toInt)
-      .setFollowRedirects(playConfig.flatMap(_.getBoolean("ws.followRedirects")).getOrElse(true))
-      .setUseProxyProperties(playConfig.flatMap(_.getBoolean("ws.useProxyProperties")).getOrElse(true))
-
-    playConfig.flatMap(_.getString("ws.useragent")).map {
-      useragent =>
-        asyncHttpConfig.setUserAgent(useragent)
-    }
-    if (!playConfig.flatMap(_.getBoolean("ws.acceptAnyCertificate")).getOrElse(false)) {
-      asyncHttpConfig.setSSLContext(SSLContext.getDefault)
-    }
-
-    new AsyncHttpClient(asyncHttpConfig.build())
-  }
+trait WSResponse {
 
   /**
-   * resets the underlying AsyncHttpClient
+   * Return the current headers of the request being constructed
    */
-  private[play] def resetClient(): Unit = {
-    clientHolder.getAndSet(None).map(oldClient => oldClient.close())
-  }
+  def allHeaders: Map[String, Seq[String]]
 
   /**
-   * retrieves or creates underlying HTTP client.
+   * Get the underlying response object.
    */
-  def client: AsyncHttpClient = {
-    clientHolder.get.getOrElse({
-      // A critical section of code. Only one caller has the opportuntity of creating a new client.
-      synchronized {
-        clientHolder.get match {
-          case None => {
-            val client = newClient()
-            clientHolder.set(Some(client))
-            client
-          }
-          case Some(client) => client
-        }
+  def underlying[T]: T
 
-      }
+  /**
+   * The response status code.
+   */
+  def status: Int
+
+  /**
+   * The response status message.
+   */
+  def statusText: String
+
+  /**
+   * Get a response header.
+   */
+  def header(key: String): Option[String]
+
+  /**
+   * Get all the cookies.
+   */
+  def cookies: Seq[WSCookie]
+
+  /**
+   * Get only one cookie, using the cookie name.
+   */
+  def cookie(name: String): Option[WSCookie]
+
+  /**
+   * The response body as String.
+   */
+  def body: String
+
+  /**
+   * The response body as Xml.
+   */
+  def xml: Elem
+
+  /**
+   * The response body as Json.
+   */
+  def json: JsValue
+
+  /**
+   * The response body as a byte string.
+   */
+  def bodyAsBytes: ByteString
+}
+
+/**
+ * A body for the request
+ */
+sealed trait WSBody
+
+/**
+ * An in memory body
+ *
+ * @param bytes The bytes of the body
+ */
+case class InMemoryBody(bytes: ByteString) extends WSBody
+
+/**
+ * A streamed body
+ *
+ * @param bytes A flow of the bytes of the body
+ */
+case class StreamedBody(bytes: Source[ByteString, _]) extends WSBody
+
+/**
+ * A file body
+ */
+case class FileBody(file: File) extends WSBody
+
+/**
+ * An empty body
+ */
+case object EmptyBody extends WSBody
+
+/**
+ * A streamed response containing a response header and a streamable body.
+ */
+case class StreamedResponse(headers: WSResponseHeaders, body: Source[ByteString, _])
+
+/**
+ * A WS Request builder.
+ */
+trait WSRequest {
+
+  /**
+   * The base URL for this request
+   */
+  val url: String
+
+  /**
+   * The URI for this request
+   */
+  lazy val uri: URI = {
+    val enc = (p: String) => java.net.URLEncoder.encode(p, "utf-8")
+    new java.net.URI(if (queryString.isEmpty) url else {
+      val qs = (for {
+        (n, vs) <- queryString
+        v <- vs
+      } yield s"${enc(n)}=${enc(v)}").mkString("&")
+      s"$url?$qs"
     })
   }
 
   /**
-   * Prepare a new request. You can then construct it by chaining calls.
-   *
-   * @param url the URL to request
+   * The method for this request
    */
-  def url(url: String): WSRequestHolder = WSRequestHolder(url, Map(), Map(), None, None, None, None, None, None)
+  val method: String
 
   /**
-   * A WS Request.
+   * The body of this request
    */
-  class WSRequest(_method: String, _auth: Option[Tuple3[String, String, AuthScheme]], _calc: Option[SignatureCalculator]) extends RequestBuilderBase[WSRequest](classOf[WSRequest], _method, false) {
+  val body: WSBody
 
-    import scala.collection.JavaConverters._
+  /**
+   * The headers for this request
+   */
+  val headers: Map[String, Seq[String]]
 
-    def getStringData = body.getOrElse("")
+  /**
+   * The query string for this request
+   */
+  val queryString: Map[String, Seq[String]]
 
-    protected var body: Option[String] = None
+  /**
+   * A calculator of the signature for this request
+   */
+  val calc: Option[WSSignatureCalculator]
 
-    override def setBody(s: String) = {
-      this.body = Some(s);
-      super.setBody(s)
-    }
+  /**
+   * The authentication this request should use
+   */
+  val auth: Option[(String, String, WSAuthScheme)]
 
-    protected var calculator: Option[SignatureCalculator] = _calc
+  /**
+   * Whether this request should follow redirects
+   */
+  val followRedirects: Option[Boolean]
 
-    protected var headers: Map[String, Seq[String]] = Map()
+  /**
+   * The timeout for the request
+   */
+  val requestTimeout: Option[Int]
 
-    protected var _url: String = null
+  /**
+   * The virtual host this request will use
+   */
+  val virtualHost: Option[String]
 
-    //this will do a java mutable set hence the {} response
-    _auth.map(data => auth(data._1, data._2, data._3)).getOrElse({})
+  /**
+   * The proxy server this request will use
+   */
+  val proxyServer: Option[WSProxyServer]
 
-    /**
-     * Add http auth headers. Defaults to HTTP Basic.
-     */
-    private def auth(username: String, password: String, scheme: AuthScheme = AuthScheme.BASIC): WSRequest = {
-      this.setRealm((new RealmBuilder)
-        .setScheme(scheme)
-        .setPrincipal(username)
-        .setPassword(password)
-        .setUsePreemptiveAuth(true)
-        .build())
-    }
+  /**
+   * sets the signature calculator for the request
+   * @param calc
+   */
+  def sign(calc: WSSignatureCalculator): WSRequest
 
-    /**
-     * Return the current headers of the request being constructed
-     */
-    def allHeaders: Map[String, Seq[String]] = {
-      mapAsScalaMapConverter(request.asInstanceOf[com.ning.http.client.Request].getHeaders()).asScala.map(e => e._1 -> e._2.asScala.toSeq).toMap
-    }
+  /**
+   * sets the authentication realm
+   */
+  def withAuth(username: String, password: String, scheme: WSAuthScheme): WSRequest
 
-    /**
-     * Return the current query string parameters
-     */
-    def queryString: Map[String, Seq[String]] = {
-      mapAsScalaMapConverter(request.asInstanceOf[com.ning.http.client.Request].getParams()).asScala.map(e => e._1 -> e._2.asScala.toSeq).toMap
-    }
+  /**
+   * adds any number of HTTP headers
+   * @param hdrs
+   */
+  def withHeaders(hdrs: (String, String)*): WSRequest
 
-    /**
-     * Retrieve an HTTP header.
-     */
-    def header(name: String): Option[String] = headers.get(name).flatMap(_.headOption)
+  /**
+   * adds any number of query string parameters to this request
+   */
+  def withQueryString(parameters: (String, String)*): WSRequest
 
-    /**
-     * The HTTP method.
-     */
-    def method: String = _method
+  /**
+   * Sets whether redirects (301, 302) should be followed automatically
+   */
+  def withFollowRedirects(follow: Boolean): WSRequest
 
-    /**
-     * The URL
-     */
-    def url: String = _url
+  /**
+   * Sets the maximum time you expect the request to take.
+   * Use Duration.Inf to set an infinite request timeout.
+   * Warning: a stream consumption will be interrupted when this time is reached unless Duration.Inf is set.
+   */
+  def withRequestTimeout(timeout: Duration): WSRequest
 
-    private def ningHeadersToMap(headers: java.util.Map[String, java.util.Collection[String]]) =
-      mapAsScalaMapConverter(headers).asScala.map(e => e._1 -> e._2.asScala.toSeq).toMap
+  /**
+   * Adds a filter to the request that can transform the request for subsequent filters.
+   */
+  def withRequestFilter(filter: WSRequestFilter): WSRequest
 
-    private def ningHeadersToMap(headers: FluentCaseInsensitiveStringsMap) = {
-      val res = mapAsScalaMapConverter(headers).asScala.map(e => e._1 -> e._2.asScala.toSeq).toMap
-      //todo: wrap the case insensitive ning map instead of creating a new one (unless perhaps immutabilty is important)
-      TreeMap(res.toSeq: _*)(CaseInsensitiveOrdered)
-    }
+  /**
+   * Sets the virtual host to use in this request
+   */
+  def withVirtualHost(vh: String): WSRequest
 
-    private[libs] def execute: Future[Response] = {
-      import com.ning.http.client.AsyncCompletionHandler
-      var result = Promise[Response]()
-      calculator.map(_.sign(this))
-      WS.client.executeRequest(this.build(), new AsyncCompletionHandler[AHCResponse]() {
-        override def onCompleted(response: AHCResponse) = {
-          result.success(Response(response))
-          response
-        }
+  /**
+   * Sets the proxy server to use in this request
+   */
+  def withProxyServer(proxyServer: WSProxyServer): WSRequest
 
-        override def onThrowable(t: Throwable) = {
-          result.failure(t)
-        }
-      })
-      result.future
-    }
+  /**
+   * Sets the body for this request
+   */
+  def withBody(body: WSBody): WSRequest
 
-    /**
-     * Set an HTTP header.
-     */
-    override def setHeader(name: String, value: String) = {
-      headers = headers + (name -> List(value))
-      super.setHeader(name, value)
-    }
-
-    /**
-     * Add an HTTP header (used for headers with multiple values).
-     */
-    override def addHeader(name: String, value: String) = {
-      headers = headers + (name -> (headers.get(name).getOrElse(List()) :+ value))
-      super.addHeader(name, value)
-    }
-
-    /**
-     * Defines the request headers.
-     */
-    override def setHeaders(hdrs: FluentCaseInsensitiveStringsMap) = {
-      headers = ningHeadersToMap(hdrs)
-      super.setHeaders(hdrs)
-    }
-
-    /**
-     * Defines the request headers.
-     */
-    override def setHeaders(hdrs: java.util.Map[String, java.util.Collection[String]]) = {
-      headers = ningHeadersToMap(hdrs)
-      super.setHeaders(hdrs)
-    }
-
-    /**
-     * Defines the request headers.
-     */
-    def setHeaders(hdrs: Map[String, Seq[String]]) = {
-      headers = hdrs
-      hdrs.foreach(header => header._2.foreach(value =>
-        super.addHeader(header._1, value)
-      ))
-      this
-    }
-
-    /**
-     * Defines the query string.
-     */
-    def setQueryString(queryString: Map[String, Seq[String]]) = {
-      for ((key, values) <- queryString; value <- values) {
-        this.addQueryParameter(key, value)
+  /**
+   * Sets the body for this request
+   */
+  def withBody[T](body: T)(implicit wrt: Writeable[T]): WSRequest = {
+    val wsBody = InMemoryBody(wrt.transform(body))
+    if (headers.contains("Content-Type")) {
+      withBody(wsBody)
+    } else {
+      wrt.contentType.fold(withBody(wsBody)) { contentType =>
+        withBody(wsBody).withHeaders("Content-Type" -> contentType)
       }
-      this
     }
-
-    /**
-     * Defines the URL.
-     */
-    override def setUrl(url: String) = {
-      _url = url
-      super.setUrl(url)
-    }
-
-    private[libs] def executeStream[A](consumer: ResponseHeaders => Iteratee[Array[Byte], A]): Future[Iteratee[Array[Byte], A]] = {
-      import com.ning.http.client.AsyncHandler
-      var doneOrError = false
-      calculator.map(_.sign(this))
-
-      var statusCode = 0
-      val iterateeP = Promise[Iteratee[Array[Byte], A]]()
-      var iteratee: Iteratee[Array[Byte], A] = null
-
-      WS.client.executeRequest(this.build(), new AsyncHandler[Unit]() {
-
-        import com.ning.http.client.AsyncHandler.STATE
-
-        override def onStatusReceived(status: HttpResponseStatus) = {
-          statusCode = status.getStatusCode()
-          STATE.CONTINUE
-        }
-
-        override def onHeadersReceived(h: HttpResponseHeaders) = {
-          val headers = h.getHeaders()
-          iteratee = consumer(ResponseHeaders(statusCode, ningHeadersToMap(headers)))
-          STATE.CONTINUE
-        }
-
-        override def onBodyPartReceived(bodyPart: HttpResponseBodyPart) = {
-          if (!doneOrError) {
-            iteratee = iteratee.pureFlatFold {
-              case Step.Done(a, e) => {
-                doneOrError = true
-                val it = Done(a, e)
-                iterateeP.success(it)
-                it
-              }
-
-              case Step.Cont(k) => {
-                k(El(bodyPart.getBodyPartBytes()))
-              }
-
-              case Step.Error(e, input) => {
-                doneOrError = true
-                val it = Error(e, input)
-                iterateeP.success(it)
-                it
-              }
-            }
-            STATE.CONTINUE
-          } else {
-            iteratee = null
-            // Must close underlying connection, otherwise async http client will drain the stream
-            bodyPart.markUnderlyingConnectionAsClosed()
-            STATE.ABORT
-          }
-        }
-
-        override def onCompleted() = {
-          Option(iteratee).map(iterateeP.success)
-        }
-
-        override def onThrowable(t: Throwable) = {
-          iterateeP.failure(t)
-        }
-      })
-      iterateeP.future
-    }
-
   }
 
   /**
-   * A WS Request builder.
+   * Sets a multipart body for this request
    */
-  case class WSRequestHolder(url: String,
-      headers: Map[String, Seq[String]],
-      queryString: Map[String, Seq[String]],
-      calc: Option[SignatureCalculator],
-      auth: Option[Tuple3[String, String, AuthScheme]],
-      followRedirects: Option[Boolean],
-      requestTimeout: Option[Int],
-      virtualHost: Option[String],
-      proxyServer: Option[ProxyServer]) {
-
-    /**
-     * sets the signature calculator for the request
-     * @param calc
-     */
-    def sign(calc: SignatureCalculator): WSRequestHolder = this.copy(calc = Some(calc))
-
-    /**
-     * sets the authentication realm
-     * @param calc
-     */
-    def withAuth(username: String, password: String, scheme: AuthScheme): WSRequestHolder =
-      this.copy(auth = Some((username, password, scheme)))
-
-    /**
-     * adds any number of HTTP headers
-     * @param hdrs
-     */
-    def withHeaders(hdrs: (String, String)*): WSRequestHolder = {
-      val headers = hdrs.foldLeft(this.headers)((m, hdr) =>
-        if (m.contains(hdr._1)) m.updated(hdr._1, m(hdr._1) :+ hdr._2)
-        else m + (hdr._1 -> Seq(hdr._2))
-      )
-      this.copy(headers = headers)
-    }
-
-    /**
-     * adds any number of query string parameters to the
-     */
-    def withQueryString(parameters: (String, String)*): WSRequestHolder =
-      this.copy(queryString = parameters.foldLeft(queryString) {
-        case (m, (k, v)) => m + (k -> (v +: m.get(k).getOrElse(Nil)))
-      })
-
-    /**
-     * Sets whether redirects (301, 302) should be followed automatically
-     */
-    def withFollowRedirects(follow: Boolean): WSRequestHolder =
-      this.copy(followRedirects = Some(follow))
-
-    @scala.deprecated("use withRequestTimeout instead", "2.1.0")
-    def withTimeout(timeout: Int): WSRequestHolder =
-      this.withRequestTimeout(timeout)
-
-    /**
-     * Sets the maximum time in millisecond you accept the request to take.
-     * Warning: a stream consumption will be interrupted when this time is reached.
-     */
-    def withRequestTimeout(timeout: Int): WSRequestHolder =
-      this.copy(requestTimeout = Some(timeout))
-
-    def withVirtualHost(vh: String): WSRequestHolder = {
-      this.copy(virtualHost = Some(vh))
-    }
-
-    def withProxyServer(proxyServer: ProxyServer): WSRequestHolder = {
-      this.copy(proxyServer = Some(proxyServer))
-    }
-
-    /**
-     * performs a get with supplied body
-     */
-
-    def get(): Future[Response] = prepare("GET").execute
-
-    /**
-     * performs a get with supplied body
-     * @param consumer that's handling the response
-     */
-    def get[A](consumer: ResponseHeaders => Iteratee[Array[Byte], A]): Future[Iteratee[Array[Byte], A]] =
-      prepare("GET").executeStream(consumer)
-
-    /**
-     * Perform a PATCH on the request asynchronously.
-     */
-    def patch[T](body: T)(implicit wrt: Writeable[T], ct: ContentTypeOf[T]): Future[Response] = prepare("PATCH", body).execute
-
-    /**
-     * Perform a PATCH on the request asynchronously.
-     * Request body won't be chunked
-     */
-    def patch(body: File): Future[Response] = prepare("PATCH", body).execute
-
-    /**
-     * performs a POST with supplied body
-     * @param consumer that's handling the response
-     */
-    def patchAndRetrieveStream[A, T](body: T)(consumer: ResponseHeaders => Iteratee[Array[Byte], A])(implicit wrt: Writeable[T], ct: ContentTypeOf[T]): Future[Iteratee[Array[Byte], A]] = prepare("PATCH", body).executeStream(consumer)
-
-    /**
-     * Perform a POST on the request asynchronously.
-     */
-    def post[T](body: T)(implicit wrt: Writeable[T], ct: ContentTypeOf[T]): Future[Response] = prepare("POST", body).execute
-
-    /**
-     * Perform a POST on the request asynchronously.
-     * Request body won't be chunked
-     */
-    def post(body: File): Future[Response] = prepare("POST", body).execute
-
-    /**
-     * performs a POST with supplied body
-     * @param consumer that's handling the response
-     */
-    def postAndRetrieveStream[A, T](body: T)(consumer: ResponseHeaders => Iteratee[Array[Byte], A])(implicit wrt: Writeable[T], ct: ContentTypeOf[T]): Future[Iteratee[Array[Byte], A]] = prepare("POST", body).executeStream(consumer)
-
-    /**
-     * Perform a PUT on the request asynchronously.
-     */
-    def put[T](body: T)(implicit wrt: Writeable[T], ct: ContentTypeOf[T]): Future[Response] = prepare("PUT", body).execute
-
-    /**
-     * Perform a PUT on the request asynchronously.
-     * Request body won't be chunked
-     */
-    def put(body: File): Future[Response] = prepare("PUT", body).execute
-
-    /**
-     * performs a PUT with supplied body
-     * @param consumer that's handling the response
-     */
-    def putAndRetrieveStream[A, T](body: T)(consumer: ResponseHeaders => Iteratee[Array[Byte], A])(implicit wrt: Writeable[T], ct: ContentTypeOf[T]): Future[Iteratee[Array[Byte], A]] = prepare("PUT", body).executeStream(consumer)
-
-    /**
-     * Perform a DELETE on the request asynchronously.
-     */
-    def delete(): Future[Response] = prepare("DELETE").execute
-
-    /**
-     * Perform a HEAD on the request asynchronously.
-     */
-    def head(): Future[Response] = prepare("HEAD").execute
-
-    /**
-     * Perform a OPTIONS on the request asynchronously.
-     */
-    def options(): Future[Response] = prepare("OPTIONS").execute
-
-    /**
-     * Execute an arbitrary method on the request asynchronously.
-     *
-     * @param method The method to execute
-     */
-    def execute(method: String): Future[Response] = prepare(method).execute
-
-    private[play] def prepare(method: String) = {
-      val request = new WSRequest(method, auth, calc).setUrl(url)
-        .setHeaders(headers)
-        .setQueryString(queryString)
-      followRedirects.map(request.setFollowRedirects)
-      requestTimeout.map { t: Int =>
-        val config = new PerRequestConfig()
-        config.setRequestTimeoutInMs(t)
-        request.setPerRequestConfig(config)
-      }
-
-      virtualHost.map {
-        v =>
-          request.setVirtualHost(v)
-      }
-
-      prepareProxy(request)
-
-      request
-    }
-
-    private[play] def prepareProxy(request: WSRequest) {
-      proxyServer.map {
-        p =>
-          import com.ning.http.client.ProxyServer.Protocol
-          val protocol: Protocol = p.protocol.getOrElse("http").toLowerCase match {
-            case "http" => Protocol.HTTP
-            case "https" => Protocol.HTTPS
-            case "kerberos" => Protocol.KERBEROS
-            case "ntlm" => Protocol.NTLM
-            case "spnego" => Protocol.SPNEGO
-            case _ => scala.sys.error("Unrecognized protocol!")
-          }
-
-          val proxyServer = new AHCProxyServer(
-            protocol,
-            p.host,
-            p.port,
-            p.principal.getOrElse(null),
-            p.password.getOrElse(null))
-
-          p.encoding.map { e =>
-            proxyServer.setEncoding(e)
-          }
-
-          p.nonProxyHosts.map { nonProxyHosts =>
-            nonProxyHosts.foreach { nonProxyHost =>
-              proxyServer.addNonProxyHost(nonProxyHost)
-            }
-          }
-
-          p.ntlmDomain.map { ntlm =>
-            proxyServer.setNtlmDomain(ntlm)
-          }
-
-          request.setProxyServer(proxyServer)
-      }
-    }
-
-    private[play] def prepare(method: String, body: File) = {
-      import com.ning.http.client.generators.FileBodyGenerator
-
-      val bodyGenerator = new FileBodyGenerator(body);
-
-      val request = new WSRequest(method, auth, calc).setUrl(url)
-        .setHeaders(headers)
-        .setQueryString(queryString)
-        .setBody(bodyGenerator)
-      followRedirects.map(request.setFollowRedirects)
-      requestTimeout.map { t: Int =>
-        val config = new PerRequestConfig()
-        config.setRequestTimeoutInMs(t)
-        request.setPerRequestConfig(config)
-      }
-      virtualHost.map {
-        v =>
-          request.setVirtualHost(v)
-      }
-
-      prepareProxy(request)
-
-      request
-    }
-
-    private[play] def prepare[T](method: String, body: T)(implicit wrt: Writeable[T], ct: ContentTypeOf[T]) = {
-      val request = new WSRequest(method, auth, calc).setUrl(url)
-        .setHeaders(Map("Content-Type" -> Seq(ct.mimeType.getOrElse("text/plain"))) ++ headers)
-        .setQueryString(queryString)
-        .setBody(wrt.transform(body))
-      followRedirects.map(request.setFollowRedirects)
-      requestTimeout.map { t: Int =>
-        val config = new PerRequestConfig()
-        config.setRequestTimeoutInMs(t)
-        request.setPerRequestConfig(config)
-      }
-      virtualHost.map {
-        v =>
-          request.setVirtualHost(v)
-      }
-      prepareProxy(request)
-
-      request
-    }
+  def withBody(body: Source[MultipartFormData.Part[Source[ByteString, _]], _]): WSRequest = {
+    val boundary = Multipart.randomBoundary()
+    val contentType = s"multipart/form-data; boundary=$boundary"
+    withBody(StreamedBody(Multipart.transform(body, boundary))).withHeaders("Content-Type" -> contentType)
   }
+
+  /**
+   * Sets the method for this request
+   */
+  def withMethod(method: String): WSRequest
+
+  /**
+   * performs a get
+   */
+  def get(): Future[WSResponse] = withMethod("GET").execute()
+
+  /**
+   * Perform a PATCH on the request asynchronously.
+   */
+  def patch[T](body: T)(implicit wrt: Writeable[T]): Future[WSResponse] =
+    withMethod("PATCH").withBody(body).execute()
+
+  /**
+   * Perform a PATCH on the request asynchronously.
+   * Request body won't be chunked
+   */
+  def patch(body: File): Future[WSResponse] = withMethod("PATCH").withBody(FileBody(body)).execute()
+
+  /**
+   * Perform a PATCH on the request asynchronously.
+   */
+  def patch(body: Source[MultipartFormData.Part[Source[ByteString, _]], _]): Future[WSResponse] = {
+    withMethod("PATCH").withBody(body).execute()
+  }
+
+  /**
+   * Perform a POST on the request asynchronously.
+   */
+  def post[T](body: T)(implicit wrt: Writeable[T]): Future[WSResponse] =
+    withMethod("POST").withBody(body).execute()
+
+  /**
+   * Perform a POST on the request asynchronously.
+   * Request body won't be chunked
+   */
+  def post(body: File): Future[WSResponse] = withMethod("POST").withBody(FileBody(body)).execute()
+
+  /**
+   * Perform a POST on the request asynchronously.
+   */
+  def post(body: Source[MultipartFormData.Part[Source[ByteString, _]], _]): Future[WSResponse] = {
+    withMethod("POST").withBody(body).execute()
+  }
+
+  /**
+   * Perform a PUT on the request asynchronously.
+   */
+  def put[T](body: T)(implicit wrt: Writeable[T]): Future[WSResponse] =
+    withMethod("PUT").withBody(body).execute()
+
+  /**
+   * Perform a PUT on the request asynchronously.
+   * Request body won't be chunked
+   */
+  def put(body: File): Future[WSResponse] = withMethod("PUT").withBody(FileBody(body)).execute()
+
+  /**
+   * Perform a PUT on the request asynchronously.
+   */
+  def put(body: Source[MultipartFormData.Part[Source[ByteString, _]], _]): Future[WSResponse] = {
+    withMethod("PUT").withBody(body).execute()
+  }
+
+  /**
+   * Perform a DELETE on the request asynchronously.
+   */
+  def delete(): Future[WSResponse] = withMethod("DELETE").execute()
+
+  /**
+   * Perform a HEAD on the request asynchronously.
+   */
+  def head(): Future[WSResponse] = withMethod("HEAD").execute()
+
+  /**
+   * Perform a OPTIONS on the request asynchronously.
+   */
+  def options(): Future[WSResponse] = withMethod("OPTIONS").execute()
+
+  def execute(method: String): Future[WSResponse] = withMethod(method).execute()
+
+  /**
+   * Execute this request
+   */
+  def execute(): Future[WSResponse]
+
+  /**
+   * Execute this request and stream the response body.
+   */
+  def stream(): Future[StreamedResponse]
+}
+
+/**
+ *
+ */
+trait WSAuthScheme {
+  // Purposely not sealed in case clients want to add their own auth schemes.
+}
+
+object WSAuthScheme {
+
+  case object DIGEST extends WSAuthScheme
+
+  case object BASIC extends WSAuthScheme
+
+  case object NTLM extends WSAuthScheme
+
+  case object SPNEGO extends WSAuthScheme
+
+  case object KERBEROS extends WSAuthScheme
 
 }
 
 /**
- * A WS proxy.
- */
-case class ProxyServer(
-  /** The hostname of the proxy server. */
-  host: String,
-
-  /** The port of the proxy server. */
-  port: Int,
-
-  /** The protocol of the proxy server.  Use "http" or "https".  Defaults to "http" if not specified. */
-  protocol: Option[String] = None,
-
-  /** The principal (aka username) of the credentials for the proxy server. */
-  principal: Option[String] = None,
-
-  /** The password for the credentials for the proxy server. */
-  password: Option[String] = None,
-
-  ntlmDomain: Option[String] = None,
-
-  encoding: Option[String] = None,
-
-  nonProxyHosts: Option[Seq[String]] = None)
-
-/**
  * A WS Cookie.  This is a trait so that we are not tied to a specific client.
  */
-trait Cookie {
+trait WSCookie {
 
   /**
    * The underlying "native" cookie object for the client.
    */
-  def underlying: AnyRef
+  def underlying[T]: T
 
   /**
    * The domain.
@@ -638,180 +455,80 @@ trait Cookie {
   /**
    * The maximum age.
    */
-  def maxAge: Int
+  def maxAge: Option[Long]
 
   /**
    * If the cookie is secure.
    */
   def secure: Boolean
-
-  /**
-   * The cookie version.
-   */
-  def version: Int
 }
 
 /**
- * The Ning implementation of a WS cookie.
+ * A WS proxy.
  */
-private class NingCookie(ahcCookie: AHCCookie) extends Cookie {
+trait WSProxyServer {
+  /** The hostname of the proxy server. */
+  def host: String
 
-  private def noneIfEmpty(value: String): Option[String] = {
-    if (value.isEmpty) None else Some(value)
-  }
+  /** The port of the proxy server. */
+  def port: Int
 
-  /**
-   * The underlying cookie object for the client.
-   */
-  def underlying = ahcCookie
+  /** The protocol of the proxy server.  Use "http" or "https".  Defaults to "http" if not specified. */
+  def protocol: Option[String]
 
-  /**
-   * The domain.
-   */
-  def domain: String = ahcCookie.getDomain
+  /** The principal (aka username) of the credentials for the proxy server. */
+  def principal: Option[String]
 
-  /**
-   * The cookie name.
-   */
-  def name: Option[String] = noneIfEmpty(ahcCookie.getName)
+  /** The password for the credentials for the proxy server. */
+  def password: Option[String]
 
-  /**
-   * The cookie value.
-   */
-  def value: Option[String] = noneIfEmpty(ahcCookie.getValue)
+  def ntlmDomain: Option[String]
 
-  /**
-   * The path.
-   */
-  def path: String = ahcCookie.getPath
+  /** The realm's charset. */
+  def encoding: Option[String]
 
-  /**
-   * The maximum age.
-   */
-  def maxAge: Int = ahcCookie.getMaxAge
-
-  /**
-   * If the cookie is secure.
-   */
-  def secure: Boolean = ahcCookie.isSecure
-
-  /**
-   * The cookie version.
-   */
-  def version: Int = ahcCookie.getVersion
-
-  /*
-   * Cookie ports should not be used; cookies for a given host are shared across
-   * all the ports on that host.
-   */
-
-  override def toString: String = ahcCookie.toString
+  def nonProxyHosts: Option[Seq[String]]
 }
 
 /**
- * A WS HTTP response.
+ * A WS proxy.
  */
-case class Response(ahcResponse: AHCResponse) {
+case class DefaultWSProxyServer(
+  /** The hostname of the proxy server. */
+  host: String,
 
-  import scala.xml._
-  import play.api.libs.json._
+  /** The port of the proxy server. */
+  port: Int,
 
-  /**
-   * Get the underlying response object.
-   */
-  def getAHCResponse = ahcResponse
+  /** The protocol of the proxy server.  Use "http" or "https".  Defaults to "http" if not specified. */
+  protocol: Option[String] = None,
 
-  /**
-   * The response status code.
-   */
-  def status: Int = ahcResponse.getStatusCode()
+  /** The principal (aka username) of the credentials for the proxy server. */
+  principal: Option[String] = None,
 
-  /**
-   * The response status message.
-   */
-  def statusText: String = ahcResponse.getStatusText()
+  /** The password for the credentials for the proxy server. */
+  password: Option[String] = None,
 
-  /**
-   * Get a response header.
-   */
-  def header(key: String): Option[String] = Option(ahcResponse.getHeader(key))
+  ntlmDomain: Option[String] = None,
 
-  /**
-   * Get all the cookies.
-   */
-  def cookies: Seq[Cookie] = {
-    import scala.collection.JavaConverters._
-    ahcResponse.getCookies.asScala.map(new NingCookie(_))
-  }
+  /** The realm's charset. */
+  encoding: Option[String] = None,
 
-  /**
-   * Get only one cookie, using the cookie name.
-   */
-  def cookie(name: String): Option[Cookie] = cookies.find(_.name == Option(name))
-
-  /**
-   * The response body as String.
-   */
-  lazy val body: String = {
-    // RFC-2616#3.7.1 states that any text/* mime type should default to ISO-8859-1 charset if not
-    // explicitly set, while Plays default encoding is UTF-8.  So, use UTF-8 if charset is not explicitly
-    // set and content type is not text/*, otherwise default to ISO-8859-1
-    val contentType = Option(ahcResponse.getContentType).getOrElse("application/octet-stream")
-    val charset = Option(AsyncHttpProviderUtils.parseCharset(contentType)).getOrElse {
-      if (contentType.startsWith("text/"))
-        AsyncHttpProviderUtils.DEFAULT_CHARSET
-      else
-        "utf-8"
-    }
-    ahcResponse.getResponseBody(charset)
-  }
-
-  /**
-   * The response body as Xml.
-   */
-  lazy val xml: Elem = Play.XML.loadString(body)
-
-  /**
-   * The response body as Json.
-   */
-  lazy val json: JsValue = Json.parse(ahcResponse.getResponseBodyAsBytes)
-
-}
+  nonProxyHosts: Option[Seq[String]] = None) extends WSProxyServer
 
 /**
  * An HTTP response header (the body has not been retrieved yet)
  */
-case class ResponseHeaders(status: Int, headers: Map[String, Seq[String]])
+trait WSResponseHeaders {
 
-/**
- * Sign a WS call.
- */
-trait SignatureCalculator {
+  def status: Int
 
-  /**
-   * Sign it.
-   */
-  def sign(request: WS.WSRequest)
-
+  def headers: Map[String, Seq[String]]
 }
 
+case class DefaultWSResponseHeaders(status: Int, headers: Map[String, Seq[String]]) extends WSResponseHeaders
+
 /**
- * WSPlugin implementation hook.
+ * Sign a WS call with OAuth.
  */
-class WSPlugin(app: Application) extends Plugin {
-
-  @volatile var loaded = false
-
-  override lazy val enabled = true
-
-  override def onStart() {
-    loaded = true
-  }
-
-  override def onStop() {
-    if (loaded) {
-      WS.resetClient()
-      loaded = false
-    }
-  }
-}
+trait WSSignatureCalculator

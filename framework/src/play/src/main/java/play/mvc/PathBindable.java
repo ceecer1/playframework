@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.mvc;
 
@@ -12,7 +12,7 @@ package play.mvc;
  * For example, the following type could be used to bind an Ebean user:
  *
  * <pre>
- * @Entity
+ * &#64;Entity
  * class User extends Model implements PathBindable&lt;User&gt; {
  *     public String email;
  *     public String name;
@@ -62,6 +62,7 @@ public interface PathBindable<T extends PathBindable<T>> {
      * Unbind a URL path parameter.
      *
      * @param key Parameter key
+     * @return a suitable string representation of T for use in constructing a new URL path
      */
     public String unbind(String key);
 

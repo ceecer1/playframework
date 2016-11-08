@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.libs;
 
@@ -114,7 +114,7 @@ public class Time {
      * Cron expressions are comprised of 6 required fields and one optional field
      * separated by white space. The fields respectively are described as follows:
      * 
-     * <table cellspacing="8">
+     * <table cellspacing="8" summary="cron expression examples">
      * <tr>
      * <th align="left">Field Name</th>
      * <th align="left">&nbsp;</th>
@@ -124,51 +124,51 @@ public class Time {
      * </tr>
      * <tr>
      * <td align="left"><code>Seconds</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>0-59</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>, - * /</code></td>
      * </tr>
      * <tr>
      * <td align="left"><code>Minutes</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>0-59</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>, - * /</code></td>
      * </tr>
      * <tr>
      * <td align="left"><code>Hours</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>0-23</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>, - * /</code></td>
      * </tr>
      * <tr>
      * <td align="left"><code>Day-of-month</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>1-31</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>, - * ? / L W</code></td>
      * </tr>
      * <tr>
      * <td align="left"><code>Month</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>1-12 or JAN-DEC</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>, - * /</code></td>
      * </tr>
      * <tr>
      * <td align="left"><code>Day-of-Week</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>1-7 or SUN-SAT</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>, - * ? / L #</code></td>
      * </tr>
      * <tr>
      * <td align="left"><code>Year (Optional)</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>empty, 1970-2099</code></td>
-     * <td align="left">&nbsp;</th>
+     * <td align="left">&nbsp;</td>
      * <td align="left"><code>, - * /</code></td>
      * </tr>
      * </table>
@@ -178,7 +178,7 @@ public class Time {
      * <P>
      * The '?' character is allowed for the day-of-month and day-of-week fields. It
      * is used to specify 'no specific value'. This is useful when you need to
-     * specify something in one of the two fileds, but not the other.
+     * specify something in one of the two fields, but not the other.
      * <P>
      * The '-' character is used to specify ranges For example &quot;10-12&quot; in
      * the hour field means &quot;the hours 10, 11 and 12&quot;.
@@ -254,8 +254,7 @@ public class Time {
      * not complete (you'll need to use the '?' character in on of these fields).
      * </li>
      * </ul>
-     * </p>
-     * 
+     *
      * 
      * @author Sharada Jambula, James House
      * @author Contributions from Mads Henderson
@@ -613,14 +612,14 @@ public class Time {
                 }
                 if (type != DAY_OF_WEEK && type != DAY_OF_MONTH) {
                     throw new ParseException(
-                            "'?' can only be specfied for Day-of-Month or Day-of-Week.",
+                            "'?' can only be specified for Day-of-Month or Day-of-Week.",
                             i);
                 }
                 if (type == DAY_OF_WEEK && !lastdayOfMonth) {
                     int val = daysOfMonth.last().intValue();
                     if (val == NO_SPEC_INT) {
                         throw new ParseException(
-                                "'?' can only be specfied for Day-of-Month -OR- Day-of-Week.",
+                                "'?' can only be specified for Day-of-Month -OR- Day-of-Week.",
                                 i);
                     }
                 }
@@ -839,7 +838,7 @@ public class Time {
         }
 
         public String getExpressionSummary() {
-            StringBuffer buf = new StringBuffer();
+            StringBuilder buf = new StringBuilder();
 
             buf.append("seconds: ");
             buf.append(getExpressionSetSummary(seconds));
@@ -887,7 +886,7 @@ public class Time {
                 return "*";
             }
 
-            StringBuffer buf = new StringBuffer();
+            StringBuilder buf = new StringBuilder();
 
             Iterator<Integer> itr = set.iterator();
             boolean first = true;
@@ -913,7 +912,7 @@ public class Time {
                 return "*";
             }
 
-            StringBuffer buf = new StringBuffer();
+            StringBuilder buf = new StringBuilder();
 
             Iterator<Integer> itr = list.iterator();
             boolean first = true;
@@ -1324,7 +1323,7 @@ public class Time {
                             continue;
                         }
 
-                        // find date of last occurance of this day in this month...
+                        // find date of last occurrence of this day in this month...
                         while ((day + daysToAdd + 7) <= lDay) {
                             daysToAdd += 7;
                         }

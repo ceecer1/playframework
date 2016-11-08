@@ -1,22 +1,26 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.it.http.parsing
 
+import akka.stream.Materializer
+import akka.stream.scaladsl.Source
+import akka.util.ByteString
 import play.api.test._
-import play.api.mvc.{BodyParser, BodyParsers}
-import play.api.libs.iteratee.Enumerator
+import play.api.mvc.{ BodyParser, BodyParsers }
 import scala.xml.NodeSeq
 import java.io.File
-import org.apache.commons.io.{FileUtils, IOUtils}
+import org.apache.commons.io.FileUtils
 
-object XmlBodyParserSpec extends PlaySpecification {
+class XmlBodyParserSpec extends PlaySpecification {
 
   "The XML body parser" should {
 
-    def parse(xml: String, contentType: Option[String], encoding: String, bodyParser: BodyParser[NodeSeq] = BodyParsers.parse.tolerantXml(1048576)) = {
-      await(Enumerator(xml.getBytes(encoding)) |>>>
-        bodyParser(FakeRequest().withHeaders(contentType.map(CONTENT_TYPE -> _).toSeq:_*)))
+    def parse(xml: String, contentType: Option[String], encoding: String, bodyParser: BodyParser[NodeSeq] = BodyParsers.parse.tolerantXml(1048576))(implicit mat: Materializer) = {
+      await(
+        bodyParser(FakeRequest().withHeaders(contentType.map(CONTENT_TYPE -> _).toSeq: _*))
+          .run(Source.single(ByteString(xml, encoding)))
+      )
     }
 
     "parse XML bodies" in new WithApplication() {
@@ -104,7 +108,8 @@ object XmlBodyParserSpec extends PlaySpecification {
     "parse XML bodies without loading in a related schema from a parameter" in new WithApplication() {
       val externalParameterEntity = File.createTempFile("xep", ".dtd")
       val externalGeneralEntity = File.createTempFile("xxe", ".txt")
-      FileUtils.writeStringToFile(externalParameterEntity,
+      FileUtils.writeStringToFile(
+        externalParameterEntity,
         s"""
           |<!ENTITY % xge SYSTEM "${externalGeneralEntity.toURI}">
           |<!ENTITY % pe "<!ENTITY xxe '%xge;'>">
@@ -123,7 +128,7 @@ object XmlBodyParserSpec extends PlaySpecification {
     }
 
     "gracefully fail when there are too many nested entities" in new WithApplication() {
-      val nested = for (x <- 1 to 30) yield "<!ENTITY laugh" + x  + " \"&laugh" + (x - 1) + ";&laugh" + (x - 1) + ";\">"
+      val nested = for (x <- 1 to 30) yield "<!ENTITY laugh" + x + " \"&laugh" + (x - 1) + ";&laugh" + (x - 1) + ";\">"
       val xml = s"""<?xml version="1.0"?>
                   | <!DOCTYPE billion [
                   | <!ELEMENT billion (#PCDATA)>

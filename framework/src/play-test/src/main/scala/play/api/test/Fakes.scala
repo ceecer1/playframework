@@ -1,22 +1,31 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.test
 
-import play.api.mvc._
-import play.api.libs.json.JsValue
-import scala.concurrent.Future
-import xml.NodeSeq
-import play.core.Router
-import scala.runtime.AbstractPartialFunction
+import java.security.cert.X509Certificate
+
+import akka.actor.ActorSystem
+import akka.stream.Materializer
+import akka.util.ByteString
+import play.api._
+import play.api.http._
+import play.api.inject._
+import play.api.inject.guice.GuiceApplicationBuilder
 import play.api.libs.Files.TemporaryFile
+import play.api.libs.json.JsValue
+import play.api.libs.typedmap.TypedMap
+import play.api.mvc._
+
+import scala.concurrent.Future
+import scala.xml.NodeSeq
 
 /**
  * Fake HTTP headers implementation.
  *
  * @param data Headers data.
  */
-case class FakeHeaders(override val data: Seq[(String, Seq[String])] = Seq.empty) extends Headers
+case class FakeHeaders(data: Seq[(String, String)] = Seq.empty) extends Headers(data)
 
 /**
  * Fake HTTP request implementation.
@@ -28,21 +37,34 @@ case class FakeHeaders(override val data: Seq[(String, Seq[String])] = Seq.empty
  * @param body The request body.
  * @param remoteAddress The client IP.
  */
-case class FakeRequest[A](method: String, uri: String, headers: FakeHeaders, body: A, remoteAddress: String = "127.0.0.1", version: String = "HTTP/1.1", id: Long = 666, tags: Map[String, String] = Map.empty[String, String], secure: Boolean = false) extends Request[A] {
+case class FakeRequest[A](
+    method: String,
+    uri: String,
+    headers: Headers,
+    body: A,
+    remoteAddress: String = "127.0.0.1",
+    version: String = "HTTP/1.1",
+    id: Long = 666,
+    tags: Map[String, String] = Map.empty[String, String],
+    secure: Boolean = false,
+    clientCertificateChain: Option[Seq[X509Certificate]] = None,
+    attrMap: TypedMap = TypedMap.empty
+) extends Request[A] with WithAttrMap[FakeRequest[A]] {
 
-  private def _copy[B](
+  def copyFakeRequest[B](
     id: Long = this.id,
     tags: Map[String, String] = this.tags,
     uri: String = this.uri,
     path: String = this.path,
     method: String = this.method,
     version: String = this.version,
-    headers: FakeHeaders = this.headers,
+    headers: Headers = this.headers,
     remoteAddress: String = this.remoteAddress,
     secure: Boolean = this.secure,
+    clientCertificateChain: Option[Seq[X509Certificate]] = this.clientCertificateChain,
     body: B = this.body): FakeRequest[B] = {
     new FakeRequest[B](
-      method, uri, headers, body, remoteAddress, version, id, tags, secure
+      method, uri, headers, body, remoteAddress, version, id, tags, secure, clientCertificateChain, attrMap
     )
   }
 
@@ -61,12 +83,7 @@ case class FakeRequest[A](method: String, uri: String, headers: FakeHeaders, bod
    * Constructs a new request with additional headers. Any existing headers of the same name will be replaced.
    */
   def withHeaders(newHeaders: (String, String)*): FakeRequest[A] = {
-    _copy(headers = FakeHeaders({
-      val newData = newHeaders.map {
-        case (k, v) => (k, Seq(v))
-      }
-      (Map() ++ (headers.data ++ newData)).toSeq
-    }))
+    copyFakeRequest(headers = headers.replace(newHeaders: _*))
   }
 
   /**
@@ -74,7 +91,8 @@ case class FakeRequest[A](method: String, uri: String, headers: FakeHeaders, bod
    */
   def withFlash(data: (String, String)*): FakeRequest[A] = {
     withHeaders(play.api.http.HeaderNames.COOKIE ->
-      Cookies.merge(headers.get(play.api.http.HeaderNames.COOKIE).getOrElse(""),
+      Cookies.mergeCookieHeader(
+        headers.get(play.api.http.HeaderNames.COOKIE).getOrElse(""),
         Seq(Flash.encodeAsCookie(new Flash(flash.data ++ data)))
       )
     )
@@ -85,7 +103,7 @@ case class FakeRequest[A](method: String, uri: String, headers: FakeHeaders, bod
    */
   def withCookies(cookies: Cookie*): FakeRequest[A] = {
     withHeaders(play.api.http.HeaderNames.COOKIE ->
-      Cookies.merge(headers.get(play.api.http.HeaderNames.COOKIE).getOrElse(""), cookies)
+      Cookies.mergeCookieHeader(headers.get(play.api.http.HeaderNames.COOKIE).getOrElse(""), cookies)
     )
   }
 
@@ -94,7 +112,8 @@ case class FakeRequest[A](method: String, uri: String, headers: FakeHeaders, bod
    */
   def withSession(newSessions: (String, String)*): FakeRequest[A] = {
     withHeaders(play.api.http.HeaderNames.COOKIE ->
-      Cookies.merge(headers.get(play.api.http.HeaderNames.COOKIE).getOrElse(""),
+      Cookies.mergeCookieHeader(
+        headers.get(play.api.http.HeaderNames.COOKIE).getOrElse(""),
         Seq(Session.encodeAsCookie(new Session(session.data ++ newSessions)))
       )
     )
@@ -104,66 +123,54 @@ case class FakeRequest[A](method: String, uri: String, headers: FakeHeaders, bod
    * Set a Form url encoded body to this request.
    */
   def withFormUrlEncodedBody(data: (String, String)*): FakeRequest[AnyContentAsFormUrlEncoded] = {
-    _copy(body = AnyContentAsFormUrlEncoded(play.utils.OrderPreserving.groupBy(data.toSeq)(_._1)))
+    copyFakeRequest(body = AnyContentAsFormUrlEncoded(play.utils.OrderPreserving.groupBy(data.toSeq)(_._1)))
   }
 
   def certs = Future.successful(IndexedSeq.empty)
 
   /**
-   * Sets a JSON body to this request.
-   * The content type is set to <tt>application/json</tt>.
-   * The method is set to <tt>POST</tt>.
-   *
-   * @param node the JSON Node.
-   * @param _method The request HTTP method, <tt>POST</tt> by default.
-   * @return the current fake request
-   */
-  @deprecated("Use FakeRequest(method, path) to specify the method", "2.1.0")
-  def withJsonBody(node: JsValue, _method: String): FakeRequest[AnyContentAsJson] = {
-    _copy(method = _method, body = AnyContentAsJson(node))
-      .withHeaders(play.api.http.HeaderNames.CONTENT_TYPE -> "application/json")
-  }
-
-  /**
    * Adds a JSON body to the request.
    */
   def withJsonBody(json: JsValue): FakeRequest[AnyContentAsJson] = {
-    _copy(body = AnyContentAsJson(json))
+    copyFakeRequest(body = AnyContentAsJson(json))
   }
 
   /**
    * Adds an XML body to the request.
    */
   def withXmlBody(xml: NodeSeq): FakeRequest[AnyContentAsXml] = {
-    _copy(body = AnyContentAsXml(xml))
+    copyFakeRequest(body = AnyContentAsXml(xml))
   }
 
   /**
    * Adds a text body to the request.
    */
   def withTextBody(text: String): FakeRequest[AnyContentAsText] = {
-    _copy(body = AnyContentAsText(text))
+    copyFakeRequest(body = AnyContentAsText(text))
   }
 
   /**
    * Adds a raw body to the request
    */
-  def withRawBody(bytes: Array[Byte]): FakeRequest[AnyContentAsRaw] = {
-    _copy(body = AnyContentAsRaw(RawBuffer(bytes.length, bytes)))
+  def withRawBody(bytes: ByteString): FakeRequest[AnyContentAsRaw] = {
+    copyFakeRequest(body = AnyContentAsRaw(RawBuffer(bytes.size, bytes)))
   }
 
   /**
    * Adds a multipart form data body to the request
    */
   def withMultipartFormDataBody(form: MultipartFormData[TemporaryFile]) = {
-    _copy(body = AnyContentAsMultipartFormData(form))
+    copyFakeRequest(body = AnyContentAsMultipartFormData(form))
   }
 
-  /**
-   * Adds a body to the request.
-   */
-  def withBody[B](body: B): FakeRequest[B] = {
-    _copy(body = body)
+  override def withBody[B](body: B): FakeRequest[B] = {
+    copyFakeRequest(body = body)
+  }
+
+  override protected def withAttrMap(newAttrMap: TypedMap): FakeRequest[A] = {
+    new FakeRequest[A](
+      method, uri, headers, body, remoteAddress, version, id, tags, secure, clientCertificateChain, newAttrMap
+    )
   }
 
   /**
@@ -193,60 +200,5 @@ object FakeRequest {
 
   def apply(call: Call): FakeRequest[AnyContentAsEmpty.type] = {
     apply(call.method, call.url)
-  }
-}
-
-/**
- * A Fake application.
- *
- * @param path The application path
- * @param classloader The application classloader
- * @param additionalPlugins Additional plugins class names loaded by this application
- * @param withoutPlugins Plugins class names to disable
- * @param additionalConfiguration Additional configuration
- * @param withRoutes A partial function of method name and path to a handler for handling the request
- */
-
-import play.api.{ Application, WithDefaultConfiguration, WithDefaultGlobal, WithDefaultPlugins }
-case class FakeApplication(
-  override val path: java.io.File = new java.io.File("."),
-  override val classloader: ClassLoader = classOf[FakeApplication].getClassLoader,
-  val additionalPlugins: Seq[String] = Nil,
-  val withoutPlugins: Seq[String] = Nil,
-  val additionalConfiguration: Map[String, _ <: Any] = Map.empty,
-  val withGlobal: Option[play.api.GlobalSettings] = None,
-  val withRoutes: PartialFunction[(String, String), Handler] = PartialFunction.empty) extends {
-  override val sources = None
-  override val mode = play.api.Mode.Test
-} with Application with WithDefaultConfiguration with WithDefaultGlobal with WithDefaultPlugins {
-  override def pluginClasses = {
-    additionalPlugins ++ super.pluginClasses.diff(withoutPlugins)
-  }
-
-  override def configuration = {
-    super.configuration ++ play.api.Configuration.from(additionalConfiguration)
-  }
-
-  override lazy val global = withGlobal.getOrElse(super.global)
-
-  override lazy val routes: Option[Router.Routes] = {
-    val parentRoutes = loadRoutes
-    Some(new Router.Routes() {
-      def documentation = parentRoutes.map(_.documentation).getOrElse(Nil)
-      // Use withRoutes first, then delegate to the parentRoutes if no route is defined
-      val routes = new AbstractPartialFunction[RequestHeader, Handler] {
-        override def applyOrElse[A <: RequestHeader, B >: Handler](rh: A, default: A => B) =
-          withRoutes.applyOrElse((rh.method, rh.path), (_: (String, String)) => default(rh))
-        def isDefinedAt(rh: RequestHeader) = withRoutes.isDefinedAt((rh.method, rh.path))
-      } orElse new AbstractPartialFunction[RequestHeader, Handler] {
-        override def applyOrElse[A <: RequestHeader, B >: Handler](rh: A, default: A => B) =
-          parentRoutes.map(_.routes.applyOrElse(rh, default)).getOrElse(default(rh))
-        def isDefinedAt(x: RequestHeader) = parentRoutes.map(_.routes.isDefinedAt(x)).getOrElse(false)
-      }
-      def setPrefix(prefix: String) {
-        parentRoutes.foreach(_.setPrefix(prefix))
-      }
-      def prefix = parentRoutes.map(_.prefix).getOrElse("")
-    })
   }
 }

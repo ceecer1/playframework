@@ -1,9 +1,7 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.test
-
-import play.api._
 
 import org.openqa.selenium._
 import org.openqa.selenium.firefox._
@@ -14,6 +12,7 @@ import org.fluentlenium.core._
 import java.util.concurrent.TimeUnit
 import com.google.common.base.Function
 import org.openqa.selenium.support.ui.FluentWait
+
 /**
  * A test browser (Using Selenium WebDriver) with the FluentLenium API (https://github.com/Fluentlenium/FluentLenium).
  *
@@ -121,44 +120,4 @@ object WebDriverFactory {
     }
     driver
   }
-}
-
-/**
- * A test Netty web server.
- *
- * @param port HTTP port to bind on.
- * @param application The FakeApplication to load in this server.
- */
-case class TestServer(port: Int, application: FakeApplication = FakeApplication(), sslPort: Option[Int] = None) {
-
-  private var server: play.core.server.NettyServer = _
-
-  /**
-   * Starts this server.
-   */
-  def start() {
-    if (server != null) {
-      sys.error("Server already started!")
-    }
-    //play.core.Invoker.uninit()
-    try {
-      server = new play.core.server.NettyServer(new play.core.TestApplication(application), Option(port), sslPort = sslPort, mode = Mode.Test)
-    } catch {
-      case t: Throwable =>
-        t.printStackTrace
-        throw new RuntimeException(t)
-    }
-  }
-
-  /**
-   * Stops this server.
-   */
-  def stop() {
-    if (server != null) {
-      server.stop()
-      server = null
-    }
-    //play.api.libs.concurrent.Promise.resetSystem()
-  }
-
 }

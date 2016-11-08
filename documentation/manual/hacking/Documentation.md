@@ -1,4 +1,4 @@
-<!--- Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com> -->
+<!--- Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com> -->
 # Guidelines for writing Play documentation
 
 The Play documentation is written in Markdown format, with code samples extracted from compiled, run and tested source files.
@@ -35,7 +35,7 @@ object SomeFeatureSpec extends Specification {
     "do something" in {
       //#some-label
       val msg = Seq("Hello", "world").mkString(" ")
-      //#same-label
+      //#some-label
       msg must_== "Hello world"
     }
   }
@@ -44,14 +44,14 @@ object SomeFeatureSpec extends Specification {
 
 In the above case, the ``val msg = ...`` line will be extracted and rendered as code in the page.  All code samples should be checked to ensure they compile, run, and if it makes sense, ensure that it does what the documentation says it does.  It should not try to test the features themselves.
 
-All code samples get run on the same classloader.  Consequently they must all be well namespaced, within a package that corresponds to the part of the documentation they are associated with.
+All scala/java/routes/templates code samples get run on the same classloader.  Consequently they must all be well namespaced, within a package that corresponds to the part of the documentation they are associated with.
 
 In some cases, it may not be possible for the code that should appear in the documentation to exactly match the code that you can write given the above guidelines.  In particular, some code samples require the use of package names like `controllers`.  As a last resort if there are no other ways around this, there are a number of directives you can put in the code to instruct the code samples extractor to modify the sample.  These are:
 
 * `###replace: foo` - Replace the next line with `foo`.  You may optionally terminate this command with `###`
 * `###insert: foo` - Insert `foo` before the next line.  You may optionally terminate this command with `###`
 * `###skip` - Skip the current line
-* `###skip n` - Skip the next n lines
+* `###skip: n` - Skip the next n lines
 
 For example:
 
@@ -62,7 +62,7 @@ package foo.bar.controllers
 
 import play.api.mvc._
 
-object Application extends Controller {
+class HomeController extends Controller {
   ...
 }
 //#controller
@@ -86,7 +86,7 @@ All Java code samples should be tested using JUnit.  Simple code samples are usu
 
 Scala template code samples should be tested either with Specs in Scala or JUnit in Java.  Note that templates are compiled with different default imports, depending on whether they live in the Scala documentation or the Java documentation.  It is therefore also important to test them in the right context, if a template is relying on Java thread locals, they should be tested from a Java action.
 
-Where possible, template code samples should be consoloditated in a single file, but this may not always be possible, for example if the code sample contains a parameter declaration.
+Where possible, template code samples should be consolidated in a single file, but this may not always be possible, for example if the code sample contains a parameter declaration.
 
 ### Routes files
 
@@ -96,7 +96,7 @@ The routes compiler used by the documentation runs in a special mode that genera
 
 ### SBT code
 
-At current, SBT code samples cannot be pulled out of the documentation, since compiling and running them will require a very custom SBT setup involving using completely different classloaders and classpaths.
+SBT code samples should be extracted to `*.sbt` files.  These files get tested separately by the `evaluateSbtFiles` task, which compiles and runs them - by load, it means it runs the settings definitions (ie, builds a `Seq[Setting[_]]`, but doesn't actually run the tasks or settings declared.  The classloader used to run these is the same as the SBT classloader, so any plugins that the code snippets require need to be plugins to the sbt project.
 
 ### Other code
 
@@ -104,8 +104,10 @@ Other code may or may not be testable.  It may make sense to test Javascript cod
 
 ## Testing the docs
 
-To ensure that the docs render correctly, run `./build run` from within the documentation directory.  This will start a small Play server that does nothing but serve the documentation.
+To build the docs, you'll first need to build and publish Play locally. You can do this by running `sbt publishLocal` from within the `framework` directory of the playframework repository.
 
-To ensure that the code samples compile, run and tests pass, run `./build test`.
+To ensure that the docs render correctly, run `sbt run` from within the `documentation` directory.  This will start a small Play server that does nothing but serve the documentation.
 
-To validate that the documentation is structurely sound, run `./build validate-docs`.  This checks that there are no broken wiki links, code references or resource links, ensures that all documentation markdown filenames are unique, and ensures that there are no orphaned pages.
+To ensure that the code samples compile, run and tests pass, run `sbt test`.
+
+To validate that the documentation is structurally sound, run `sbt validateDocs`.  This checks that there are no broken wiki links, code references or resource links, ensures that all documentation markdown filenames are unique, and ensures that there are no orphaned pages.

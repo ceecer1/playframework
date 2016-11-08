@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.libs.json
 
@@ -14,15 +14,14 @@ import play.api.libs.json.util._
 import play.api.libs.json.Reads._
 import play.api.libs.functional.syntax._
 
-
-object JsonTransSpec extends Specification {
+class JsonTransSpec extends Specification {
   "JSON transformers " should {
     val js = Json.obj(
       "field1" -> "alpha",
       "field2" -> 123L,
       "field3" -> Json.obj(
         "field31" -> "beta",
-        "field32"-> 345
+        "field32" -> 345
       ),
       "field4" -> Json.arr("alpha", 2, true, Json.obj("field41" -> "toto", "field42" -> "tata"))
     )
@@ -32,7 +31,7 @@ object JsonTransSpec extends Specification {
         (__ \ 'field3).json.pick
       ).get must beEqualTo(
         Json.obj(
-          "field31" -> "beta", "field32"-> 345
+          "field31" -> "beta", "field32" -> 345
         )
       )
     }
@@ -42,7 +41,7 @@ object JsonTransSpec extends Specification {
         (__ \ 'field3).json.pickBranch
       ).get must beEqualTo(
         Json.obj(
-          "field3" -> Json.obj("field31" -> "beta", "field32"-> 345)
+          "field3" -> Json.obj("field31" -> "beta", "field32" -> 345)
         )
       )
     }
@@ -50,60 +49,60 @@ object JsonTransSpec extends Specification {
     "copy input JSON and update a branch (merge the updated branch with input JSON)" in {
       js.transform(
         (__ \ 'field3).json.update(
-          __.read[JsObject].map{ o => o ++ Json.obj( "field33" -> false ) }
+          __.read[JsObject].map { o => o ++ Json.obj("field33" -> false) }
         )
       ).get must beEqualTo(
-        Json.obj(
-          "field1" -> "alpha",
-          "field2" -> 123L,
-          "field3" -> Json.obj(
-            "field31" -> "beta",
-            "field32" -> 345,
-            "field33" -> false
-          ),
-          "field4" -> Json.arr("alpha", 2, true, Json.obj("field41" -> "toto", "field42" -> "tata"))
+          Json.obj(
+            "field1" -> "alpha",
+            "field2" -> 123L,
+            "field3" -> Json.obj(
+              "field31" -> "beta",
+              "field32" -> 345,
+              "field33" -> false
+            ),
+            "field4" -> Json.arr("alpha", 2, true, Json.obj("field41" -> "toto", "field42" -> "tata"))
+          )
         )
-      )
     }
 
     "pick a branch and update its content" in {
       js.transform(
         (__ \ 'field3).json.pickBranch(
           (__ \ 'field32).json.update(
-            Reads.of[JsNumber].map{ case JsNumber(nb) => JsNumber(nb + 12) }
+            Reads.of[JsNumber].map { case JsNumber(nb) => JsNumber(nb + 12) }
           ) andThen
-          (__ \ 'field31).json.update(
-            Reads.of[JsString].map{ case JsString(s) => JsString(s + "toto") }
-          )
+            (__ \ 'field31).json.update(
+              Reads.of[JsString].map { case JsString(s) => JsString(s + "toto") }
+            )
         )
       ).get must beEqualTo(
-        Json.obj(
-          "field3" -> Json.obj("field31" -> "betatoto", "field32"-> 357)
+          Json.obj(
+            "field3" -> Json.obj("field31" -> "betatoto", "field32" -> 357)
+          )
         )
-      )
     }
 
     "put a value in a new branch (don't keep passed json)" in {
       js.transform(
         (__ \ 'field3).json.put(JsNumber(234))
       ).get must beEqualTo(
-        Json.obj(
-          "field3" -> 234
+          Json.obj(
+            "field3" -> 234
+          )
         )
-      )
     }
 
     "create a new path by copying a branch" in {
       js.transform(
-        (__ \ 'field5).json.copyFrom( (__ \ 'field3).json.pick )
+        (__ \ 'field5).json.copyFrom((__ \ 'field3).json.pick)
       ).get must beEqualTo(
-        Json.obj(
-          "field5" -> Json.obj(
-            "field31" -> "beta",
-            "field32" -> 345
+          Json.obj(
+            "field5" -> Json.obj(
+              "field31" -> "beta",
+              "field32" -> 345
+            )
           )
         )
-      )
     }
 
     "copy full json and prune a branch" in {
@@ -124,27 +123,27 @@ object JsonTransSpec extends Specification {
           (__ \ 'field32).json.prune
         )
       ).get must beEqualTo(
-        Json.obj(
-          "field3" -> Json.obj("field31" -> "beta")
+          Json.obj(
+            "field3" -> Json.obj("field31" -> "beta")
+          )
         )
-      )
     }
 
     "copy the full json and update a 2nd-level path and then prune a subbranch" in {
       js.validate(
         (__ \ 'field3 \ 'field32).json.update(
-          Reads.of[JsNumber].map{ case JsNumber(nb) => JsNumber(nb + 5) }
+          Reads.of[JsNumber].map { case JsNumber(nb) => JsNumber(nb + 5) }
         ) andThen (__ \ 'field4).json.prune
       ).get must beEqualTo(
-        Json.obj(
-          "field1" -> "alpha",
-          "field2" -> 123L,
-          "field3" -> Json.obj(
-            "field31" -> "beta",
-            "field32"-> 350
+          Json.obj(
+            "field1" -> "alpha",
+            "field2" -> 123L,
+            "field3" -> Json.obj(
+              "field31" -> "beta",
+              "field32" -> 350
+            )
           )
         )
-      )
     }
 
     "deepMerge when reducing JsObjects" in {
@@ -164,13 +163,13 @@ object JsonTransSpec extends Specification {
       "when the field to modify doesn't exist" in {
         js.transform(
           (__ \ 'field42).json.update(__.read[JsString])
-        ).asEither.left.get.head must_== (__ \ 'field42, Seq(ValidationError("error.path.missing")))
+        ).asEither.left.get.head must_== ((__ \ 'field42, Seq(ValidationError("error.path.missing"))))
       }
 
       "when the reader is the wrong type" in {
         js.transform(
           (__ \ 'field2).json.update(__.read[JsString])
-        ).asEither.left.get.head must_== (__ \ 'field2, Seq(ValidationError("error.expected.jsstring")))
+        ).asEither.left.get.head must_== ((__ \ 'field2, Seq(ValidationError("error.expected.jsstring"))))
       }
     }
   }

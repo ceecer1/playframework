@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.test;
 
@@ -40,7 +40,7 @@ public class TestBrowser extends FluentAdapter {
     }
 
     /**
-     * Creates a generic FluentWait<WebDriver> instance 
+     * Creates a generic {@code FluentWait<WebDriver>} instance
      * using the underlying web driver
      */
     public FluentWait<WebDriver> fluentWait() {
@@ -56,7 +56,7 @@ public class TestBrowser extends FluentAdapter {
      * Useful in situations where FluentAdapter#await is too specific
      * (for example to check against page source)
      *
-     * @param wait generic FluentWait<WebDriver> instance
+     * @param wait generic {@code FluentWait<WebDriver>} instance
      * @param f function to execute
      */
     public <T>T waitUntil(FluentWait<WebDriver> wait, Function<WebDriver, T> f) {

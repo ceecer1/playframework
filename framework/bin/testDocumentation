@@ -1,0 +1,16 @@
+#! /bin/bash
+
+# Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
+
+. "$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )/build"
+
+echo "[info]"
+echo "[info] ---- RUNNING DOCUMENTATION TESTS"
+echo "[info]"
+
+cd $DOCUMENTATION
+build "$@" clean test evaluateSbtFiles validateDocs
+
+echo "[info]"
+echo "[info] ALL TESTS PASSED"
+echo "[info]"

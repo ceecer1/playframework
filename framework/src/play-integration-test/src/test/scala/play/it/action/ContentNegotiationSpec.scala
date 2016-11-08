@@ -1,13 +1,20 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.it.action
 
-import play.api.test.{FakeRequest, PlaySpecification}
-import play.api.mvc.{SimpleResult, Action, Controller}
+import akka.actor.ActorSystem
+import akka.stream.ActorMaterializer
+import play.api.mvc._
+import play.api.test.{ FakeRequest, PlaySpecification }
+
 import scala.concurrent.Future
 
-object ContentNegotiationSpec extends PlaySpecification with Controller {
+class ContentNegotiationSpec extends PlaySpecification with BaseController {
+
+  implicit val system = ActorSystem()
+  implicit val mat = ActorMaterializer()
+  val Action = ActionBuilder.ignoringBody
 
   "rendering" should {
     "work with simple results" in {

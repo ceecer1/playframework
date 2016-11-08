@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.libs.json
 
@@ -40,47 +40,41 @@ object JsError {
     JsError(merge(e1.errors, e2.errors))
   }
 
-  //def toJson: JsValue = original // TODO
+  def toJson(e: JsError): JsObject = toJson(e.errors, false)
+  def toJson(errors: Seq[(JsPath, Seq[ValidationError])]): JsObject = toJson(errors, false)
   //def toJsonErrorsOnly: JsValue = original // TODO
   def toFlatForm(e: JsError): Seq[(String, Seq[ValidationError])] = e.errors.map { case (path, seq) => path.toJsonString -> seq }
-  def toFlatJson(e: JsError): JsObject = toFlatJson(e.errors)
-  def toFlatJson(errors: Seq[(JsPath, Seq[ValidationError])]): JsObject =
+
+  private def toJson(errors: Seq[(JsPath, Seq[ValidationError])], flat: Boolean): JsObject = {
+    val argsWrite = Writes.traversableWrites[Any](Writes.anyWrites)
     errors.foldLeft(Json.obj()) { (obj, error) =>
       obj ++ Json.obj(error._1.toJsonString -> error._2.foldLeft(Json.arr()) { (arr, err) =>
         arr :+ Json.obj(
-          "msg" -> err.message,
-          "args" -> err.args.foldLeft(Json.arr()) { (arr, arg) =>
-            arr :+ (arg match {
-              case s: String => JsString(s)
-              case nb: Int => JsNumber(nb)
-              case nb: Short => JsNumber(nb)
-              case nb: Long => JsNumber(nb)
-              case nb: Double => JsNumber(nb)
-              case nb: Float => JsNumber(nb)
-              case b: Boolean => JsBoolean(b)
-              case js: JsValue => js
-              case x => JsString(x.toString)
-            })
-          }
+          "msg" -> (if (flat) err.message else Json.toJson(err.messages)),
+          "args" -> Json.toJson(err.args)(argsWrite)
         )
       })
     }
+  }
 }
 
 sealed trait JsResult[+A] { self =>
 
-  def fold[X](invalid: Seq[(JsPath, Seq[ValidationError])] => X, valid: A => X): X = this match {
+  def isSuccess: Boolean = this.isInstanceOf[JsSuccess[_]]
+  def isError: Boolean = this.isInstanceOf[JsError]
+
+  def fold[B](invalid: Seq[(JsPath, Seq[ValidationError])] => B, valid: A => B): B = this match {
     case JsSuccess(v, _) => valid(v)
     case JsError(e) => invalid(e)
   }
 
-  def map[X](f: A => X): JsResult[X] = this match {
+  def map[B](f: A => B): JsResult[B] = this match {
     case JsSuccess(v, path) => JsSuccess(f(v), path)
     case e: JsError => e
   }
 
-  def filterNot(error: ValidationError)(p: A => Boolean): JsResult[A] =
-    this.flatMap { a => if (p(a)) JsError(error) else JsSuccess(a) }
+  def filterNot(error: JsError)(p: A => Boolean): JsResult[A] =
+    this.flatMap { a => if (p(a)) error else JsSuccess(a) }
 
   def filterNot(p: A => Boolean): JsResult[A] =
     this.flatMap { a => if (p(a)) JsError() else JsSuccess(a) }
@@ -88,15 +82,15 @@ sealed trait JsResult[+A] { self =>
   def filter(p: A => Boolean): JsResult[A] =
     this.flatMap { a => if (p(a)) JsSuccess(a) else JsError() }
 
-  def filter(otherwise: ValidationError)(p: A => Boolean): JsResult[A] =
-    this.flatMap { a => if (p(a)) JsSuccess(a) else JsError(otherwise) }
+  def filter(otherwise: JsError)(p: A => Boolean): JsResult[A] =
+    this.flatMap { a => if (p(a)) JsSuccess(a) else otherwise }
 
   def collect[B](otherwise: ValidationError)(p: PartialFunction[A, B]): JsResult[B] = flatMap {
     case t if p.isDefinedAt(t) => JsSuccess(p(t))
     case _ => JsError(otherwise)
   }
 
-  def flatMap[X](f: A => JsResult[X]): JsResult[X] = this match {
+  def flatMap[B](f: A => JsResult[B]): JsResult[B] = this match {
     case JsSuccess(v, path) => f(v).repath(path)
     case e: JsError => e
   }
@@ -193,5 +187,9 @@ object JsResult {
       case (JsError(e), _) => JsError(e)
       case (_, JsError(e)) => JsError(e)
     }
+  }
+
+  implicit val functorJsResult: Functor[JsResult] = new Functor[JsResult] {
+    override def fmap[A, B](m: JsResult[A], f: A => B) = m map f
   }
 }

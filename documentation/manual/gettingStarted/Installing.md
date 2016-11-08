@@ -1,50 +1,112 @@
-<!--- Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com> -->
+<!--- Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com> -->
 # Installing Play
+
+This page shows how to download, install and run a Play application.  There's a built in tutorial that shows you around, so running this Play application will show you how Play itself works!
+
+Play is a series of libraries available in [Maven Repository](https://mvnrepository.com/artifact/com.typesafe.play), so you can use any Java build tool to build a Play project. However, much of the development experience Play is known for (routes, templates compilation and auto-reloading) is provided by SBT. In this guide we describe how to install Play with SBT. We also describe how to use Activator, an SBT wrapper that provides a graphical interface.
 
 ## Prerequisites
 
-To run the Play framework, you need [JDK 6 or later](http://www.oracle.com/technetwork/java/javase/downloads/index.html). 
-
-> If you are using MacOS, Java is built-in. If you are using Linux, make sure to use either the Sun JDK or OpenJDK (and not gcj, which is the default Java command on many Linux distros). If you are using Windows, just download and install the latest JDK package.
-
-> Note, Java 7 pre update 9 on MacOS has a bug that causes problems with futures and iteratees, including making large file uploads hang.  If using Java 7 on MacOS, make sure you are using the latest version.
-
-Be sure to have the `java` and `javac` commands in the current path (you can check this by typing `java -version` and `javac -version` at the shell prompt). 
-
-## Download the binary package
-
-### Using Typesafe Activator
-
-Play can be installed using [Typesafe Activator](http://typesafe.com/activator).  The documentation on this page is about installing the Play standalone distribution.  If you would like to use Typesafe Activator, then follow the instructions [here](http://typesafe.com/platform/getstarted) to install Play.
-
-### Using Play standalone
-
-Download the latest [Play standalone distribution](http://www.playframework.com/download) and extract the archive to a location where you have both read **and write** access. (Running `play` writes some files to directories within the archive, so don't install to `/opt`, `/usr/local` or anywhere else you’d need special permission to write to.)
-
-## Add the play script to your PATH
-
-For convenience, you should add the framework installation directory to your system PATH. On UNIX systems, this means doing something like:
+Play requires Java 1.8.  To check that you have the latest JDK, please run:
 
 ```bash
-export PATH=$PATH:/relativePath/to/play
+java -version
 ```
 
-On Windows you’ll need to set it in the global environment variables. This means update the PATH in the environment variables and don't use a path with spaces.
+If you don't have the JDK, you have to install it from [Oracle's JDK Site](http://www.oracle.com/technetwork/java/javase/downloads/index.html).
 
-> If you’re on UNIX, make sure that the `play` script is executable (otherwise do a `chmod a+x play`).
+## Installing Play with SBT
 
-> If you behind a proxy make sure to define it with `set HTTP_PROXY=http://<host>:<port>` on Windows or `export  HTTP_PROXY=http://<host>:<port>` on UNIX.
+We provide a number of sample projects that have an `./sbt` launcher in the local directory. These can be found on our [download page](https://playframework.com/download#examples). This launcher will automatically download dependencies without you having to install SBT ahead of time.
 
-## Check that the play command is available
+Refer to the [SBT download page](https://www.scala-sbt.org/download.html) to install the SBT launcher on your system, which provides the `sbt` command. Otherwise you can use the SBT launcher located in your example project's directory.
 
-From a shell, launch the `play help` command. 
+### Running Play with SBT
 
-```bash
-$ play help
+SBT provides all the necessary commands to run your application. You can use `sbt run` to run your app. For more details on running Play from the command line, refer to the [[new application documentation|NewApplication]] for more details.
+
+## Installing Play with Activator
+
+Activator is a wrapper for SBT that provides a nice graphical user interface and access to a library of third-party templates. Some new users prefer this interface to just using SBT. Note that since Activator is a wrapper for SBT, any commands referencing the `sbt` command can also be used with the `activator` command.
+
+For getting started, we'll install Play through [Lightbend Activator](https://www.lightbend.com/activator/docs).
+
+Activator can be described as "sbt plus templates" -- it combines [sbt](http://www.scala-sbt.org/0.13/docs/index.html) (a build tool) plus a means of downloading [project templates](https://www.lightbend.com/activator/templates) (like Maven archetypes) and a web interface for managing those projects.  Templates can be examples, or they can be "seed" templates that provide a starting point for your own projects.
+
+Activator comes with a couple of seed templates for Play that we recommend for getting started, [play-scala](https://www.lightbend.com/activator/template/play-scala) and [play-java](https://www.lightbend.com/activator/template/play-java).
+
+### Downloading Activator
+
+Activator is distributed as a single archive file that expands out to its own subdirectory.
+
+You can download Activator from [https://playframework.com/download](https://playframework.com/download) and click on the "offline distribution" link:
+
+[[images/download.png]]
+
+The "offline distribution" comes with all of Activator's possible dependencies included.  It's a much larger initial download, but installing the offline distribution means that starting up a new Play project is **much** faster, as all the dependencies are already resolved.
+
+### Extracting Activator
+
+Extract the archive on a location where you have write access.  Running `activator` writes some files to directories within the distribution, so don't install to `/opt`, `/usr/local` or anywhere else you’d need special permission to write to.
+
+### Adding Activator to your Path
+
+For convenience, you should add the Activator installation directory to your system `PATH`:
+
+#### MacOS / Unix
+
+Add to your login profile.  Usually, this is `$HOME/.profile`:
+
+```
+export PATH=/path/to/activator-x.x.x/bin:$PATH
 ```
 
-If everything is properly installed, you should see the basic help:
+Make sure that the `activator` script is executable. If it's not:
 
-[[images/play.png]]
+```
+chmod u+x /path/to/activator-x.x.x/bin/activator
+```
 
-> **Next:** [[Creating a new application | NewApplication]]
+#### Windows
+
+In a command prompt, type:
+
+```
+setx PATH=%PATH%;"C:\path\to\activator-x.x.x\bin"
+```
+
+Note that [setx](https://technet.microsoft.com/en-us/library/cc755104.aspx) is only available on Windows 8 or later -- before that, and you will have to use the [System Properties dialog](https://java.com/en/download/help/path.xml).
+
+### Create a Project
+
+Activator comes with a couple of different "seeds" that can be used to start off a Play project: `play-java` and `play-scala`.  You can create a project based off a template either from Activator's Web Interface, or directly from the command line.
+
+Open a command prompt, and type `activator ui` to bring up the GUI interface.  A browser window will open with the Web UI at [http://localhost:8888](http://localhost:8888).
+
+> **Note:** If you're behind a proxy, make sure to define it with `set HTTP_PROXY=http://<host>:<port>` on Windows or `export  HTTP_PROXY=http://<host>:<port>` on UNIX.
+
+Follow the arrows to create a new project:
+
+[[images/webTemplate.png]]
+
+You can read the [Activator documentation](https://www.lightbend.com/activator/docs) for more information on how to use the Web Interface.
+
+### Accessing the Built-in Tutorial
+
+Activator's Web Interface contains a built in tutorial section that will walk you through your new application:
+
+[[images/webTutorial.png]]
+
+### Running Play
+
+Play has an easy to use "development mode" that will let you make changes to code and see your results immediate on the page.
+
+You can run Play in development mode from within Activator's Web Interface by going to the Run tab and clicking the Run button:
+
+[[images/webRunning.png]]
+
+This will bring up the Play application at [http://localhost:9000](http://localhost:9000).
+
+## Congratulations!
+
+You are now ready to work with Play!  The next page will show you how to create projects from the command line and some more detail about creating new applications.

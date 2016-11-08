@@ -1,31 +1,49 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.test;
 
 import org.junit.After;
-import play.api.test.Helpers$;
+import org.junit.Before;
+import play.Application;
 
 /**
- * Provides a server to JUnit tests
+ * Provides a server to JUnit tests. Make your test class extend this class and an HTTP server will be started before each test is invoked.
+ * You can setup the application and port to use by overriding the provideApplication and providePort methods.
+ * Within a test, the running application and the TCP port are available through the app and port fields, respectively.
  */
 public class WithServer {
 
-    protected FakeApplication app;
+    protected Application app;
     protected int port;
     protected TestServer testServer;
 
-    protected void start() {
-        start(Helpers.fakeApplication());
+    /**
+     * Override this method to setup the application to use.
+     *
+     * @return The application used by the server
+     */
+    protected Application provideApplication() {
+        return Helpers.fakeApplication();
     }
 
-    protected void start(FakeApplication fakeApplication) {
-        start(fakeApplication, Helpers$.MODULE$.testServerPort());
+    /**
+     * Override this method to setup the port to use.
+     *
+     * @return The TCP port used by the server
+     */
+    protected int providePort() {
+        return play.api.test.Helpers.testServerPort();
     }
 
-    protected void start(FakeApplication fakeApplication, int port) {
-        this.port = port;
-        testServer = Helpers.testServer(port, fakeApplication);
+    @Before
+    public void startServer() {
+        if (testServer != null) {
+            testServer.stop();
+        }
+        app = provideApplication();
+        port = providePort();
+        testServer = Helpers.testServer(port, app);
         testServer.start();
     }
 

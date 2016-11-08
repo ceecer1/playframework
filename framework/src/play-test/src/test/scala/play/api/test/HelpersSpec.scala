@@ -1,18 +1,32 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.test
 
-import play.api.test._
-import play.api.test.Helpers._
-import play.api.mvc._
-import play.api.mvc.Results._
-import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.Future
-
+import akka.actor.ActorSystem
+import akka.stream.ActorMaterializer
+import akka.stream.scaladsl.Source
+import akka.util.ByteString
 import org.specs2.mutable._
+import play.api.mvc.Results._
+import play.api.mvc.{ ActionBuilder, Controller, EssentialAction }
+import play.api.test.Helpers._
+import play.twirl.api.Content
+
+import scala.concurrent.Future
+import scala.language.reflectiveCalls
 
 class HelpersSpec extends Specification {
+
+  val ctrl = new Controller {
+    private val Action = ActionBuilder.ignoringBody
+    def abcAction: EssentialAction = Action {
+      Ok("abc").as("text/plain")
+    }
+    def jsonAction: EssentialAction = Action {
+      Ok("""{"content": "abc"}""").as("application/json")
+    }
+  }
 
   "inMemoryDatabase" should {
 
@@ -33,6 +47,19 @@ class HelpersSpec extends Specification {
     }
   }
 
+  "status" should {
+
+    "extract the status from Accumulator[ByteString, Result] as Int" in {
+      implicit val system = ActorSystem()
+      try {
+        implicit val mat = ActorMaterializer()
+        status(ctrl.abcAction.apply(FakeRequest())) must_== 200
+      } finally {
+        system.terminate()
+      }
+    }
+  }
+
   "contentAsString" should {
 
     "extract the content from Result as String" in {
@@ -47,12 +74,31 @@ class HelpersSpec extends Specification {
       contentAsString(content) must_== "abc"
     }
 
+    "extract the content from Accumulator[ByteString, Result] as String" in {
+      implicit val system = ActorSystem()
+      try {
+        implicit val mat = ActorMaterializer()
+        contentAsString(ctrl.abcAction.apply(FakeRequest())) must_== "abc"
+      } finally {
+        system.terminate()
+      }
+    }
   }
 
   "contentAsBytes" should {
 
     "extract the content from Result as Bytes" in {
-      contentAsBytes(Future.successful(Ok("abc"))) must_== Array(97, 98, 99)
+      contentAsBytes(Future.successful(Ok("abc"))) must_== ByteString(97, 98, 99)
+    }
+
+    "extract the content from chunked Result as Bytes" in {
+      implicit val system = ActorSystem()
+      try {
+        implicit val mat = ActorMaterializer()
+        contentAsBytes(Future.successful(Ok.chunked(Source(List("a", "b", "c"))))) must_== ByteString(97, 98, 99)
+      } finally {
+        system.terminate()
+      }
     }
 
     "extract the content from Content as Bytes" in {
@@ -80,7 +126,15 @@ class HelpersSpec extends Specification {
       (contentAsJson(jsonContent) \ "play").as[List[String]] must_== List("java", "scala")
     }
 
+    "extract the content from Accumulator[ByteString, Result] as Json" in {
+      implicit val system = ActorSystem()
+      try {
+        implicit val mat = ActorMaterializer()
+        (contentAsJson(ctrl.jsonAction.apply(FakeRequest())) \ "content").as[String] must_== "abc"
+      } finally {
+        system.terminate()
+      }
+    }
   }
-
 
 }

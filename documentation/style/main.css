@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 html,body,div,span,applet,object,iframe,h1,h2,h3,h4,h5,h6,p,blockquote,pre,a,abbr,acronym,address,big,cite,code,del,dfn,em,font,img,ins,kbd,q,s,samp,small,strike,strong,sub,sup,tt,var,dl,dt,dd,ol,ul,li,fieldset,form,label,legend,table,caption,tbody,tfoot,thead,tr,th,td{margin:0;padding:0;border:0;outline:0;font-weight:inherit;font-style:inherit;font-size:100%;font-family:inherit;}
 table{border-collapse:collapse;border-spacing:0;}
@@ -21,6 +21,8 @@ article .subheader{color:#777;font-weight:300;margin-bottom:24px;}
 article p{line-height:1.3em;margin:1em 0;}
 article p img{margin:0;}
 article p.lead{font-size:18px;font-size:1.8rem;line-height:1.5;}
+article li>p:first-child{margin-top:0;}
+article li>p:last-child{margin-bottom:0;}
 article ul li,article ol li{position:relative;padding:4px 0 4px 14px;}article ul li ol,article ol li ol,article ul li ul,article ol li ul{margin-left:20px;}
 article ul li:before,article ol li:before{position:absolute;top:8px;left:0;content:"►";color:#ccc;font-size:10px;margin-right:5px;}
 article>ol{counter-reset:section;}article>ol li:before{color:#ccc;font-size:13px;}
@@ -37,7 +39,9 @@ article abbr{text-transform:none;}
 article img{max-width:100%;}
 article pre{margin:10px 0;border:1px solid #ddd;padding:10px;background:#fafafa;color:#666;overflow:auto;border-radius:5px;}
 article code{background:#fafafa;color:#666;font-family:inconsolata, monospace;border:1px solid #ddd;border-radius:3px;height:4px;padding:0;}
+article a code{color:#80c846;}article a code:hover{color:#6dae38;}
 article pre code{border:0;background:inherit;border-radius:0;line-height:inherit;font-size:14px;}
+article pre.prettyprint{border:1px solid #ddd;padding:10px;}
 article blockquote,article blockquote p,article p.note{line-height:20px;color:#4c4742;}
 article blockquote,article .note{margin:0 0 18px;padding:1px 20px;background:#fff7d6;}article blockquote li:before,article .note li:before{color:#e0bc6f;}
 article blockquote code,article .note code{background:#f5d899;border:none;color:inherit;}
@@ -47,6 +51,13 @@ article p.note{padding:15px 20px;}
 article table{width:100%;}article table td{padding:8px;}
 article table tr{background:#F4F4F7;border-bottom:1px solid #eee;}
 article table tr:nth-of-type(odd){background:#fafafa;}
+article dl dt{font-weight:bold;}
+article dl.tabbed{position:relative;}
+article dl.tabbed dt{float:left;margin:0 5px 0 0;border:1px solid #ddd;padding:0 20px;line-height:2;border-radius: 5px 5px 0 0;}
+article dl.tabbed dt a{display:block;height:30px;color:#333;text-decoration:none;}
+article dl.tabbed dt.current{background: #f7f7f7;}
+article dl.tabbed dd{position:absolute;width:100%;left:0;top:30px;}
+article dl.tabbed dd pre{margin-top:0;border-top-left-radius:0;}
 a{color:#80c846;}a:hover{color:#6dae38;}
 p{margin:1em 0;}
 h1{-webkit-font-smoothing:antialiased;}

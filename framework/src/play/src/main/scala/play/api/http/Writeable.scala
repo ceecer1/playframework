@@ -1,16 +1,12 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.http
 
+import akka.util.ByteString
 import play.api.mvc._
 import play.api.libs.json._
-
 import scala.annotation._
-import play.api.libs.iteratee.Enumeratee
-import play.api.libs.concurrent.Execution
-
-import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
 /**
  * Transform a value of type A to a Byte Array.
@@ -20,9 +16,9 @@ import play.api.libs.concurrent.Execution.Implicits.defaultContext
 @implicitNotFound(
   "Cannot write an instance of ${A} to HTTP response. Try to define a Writeable[${A}]"
 )
-case class Writeable[-A](transform: (A => Array[Byte]), contentType: Option[String]) {
-  def map[B](f: B => A): Writeable[B] = Writeable(b => transform(f(b)), contentType)
-  def toEnumeratee[E <: A]: Enumeratee[E, Array[Byte]] = Enumeratee.map[E](transform)
+class Writeable[-A](val transform: A => ByteString, val contentType: Option[String]) {
+  def toEntity(a: A): HttpEntity = HttpEntity.Strict(transform(a), contentType)
+  def map[B](f: B => A): Writeable[B] = new Writeable(b => transform(f(b)), contentType)
 }
 
 /**
@@ -30,11 +26,15 @@ case class Writeable[-A](transform: (A => Array[Byte]), contentType: Option[Stri
  */
 object Writeable extends DefaultWriteables {
 
+  def apply[A](transform: (A => ByteString), contentType: Option[String]): Writeable[A] =
+    new Writeable(transform, contentType)
+
   /**
    * Creates a `Writeable[A]` using a content type for `A` available in the implicit scope
    * @param transform Serializing function
    */
-  def apply[A](transform: A => Array[Byte])(implicit ct: ContentTypeOf[A]): Writeable[A] = Writeable(transform, ct.mimeType)
+  def apply[A](transform: A => ByteString)(implicit ct: ContentTypeOf[A]): Writeable[A] =
+    new Writeable(transform, ct.mimeType)
 
 }
 
@@ -44,9 +44,9 @@ object Writeable extends DefaultWriteables {
 trait LowPriorityWriteables {
 
   /**
-   * `Writeable` for `Content` values.
+   * `Writeable` for `play.twirl.api.Content` values.
    */
-  implicit def writeableOf_Content[C <: Content](implicit codec: Codec, ct: ContentTypeOf[C]): Writeable[C] = {
+  implicit def writeableOf_Content[C <: play.twirl.api.Content](implicit codec: Codec, ct: ContentTypeOf[C]): Writeable[C] = {
     Writeable(content => codec.encode(content.body))
   }
 
@@ -56,6 +56,13 @@ trait LowPriorityWriteables {
  * Default Writeable.
  */
 trait DefaultWriteables extends LowPriorityWriteables {
+
+  /**
+   * `Writeable` for `play.twirl.api.Xml` values. Trims surrounding whitespace.
+   */
+  implicit def writeableOf_XmlContent(implicit codec: Codec, ct: ContentTypeOf[play.twirl.api.Xml]): Writeable[play.twirl.api.Xml] = {
+    Writeable(xml => codec.encode(xml.body.trim))
+  }
 
   /**
    * `Writeable` for `NodeSeq` values - literal Scala XML.
@@ -85,13 +92,13 @@ trait DefaultWriteables extends LowPriorityWriteables {
    * `Writeable` for `JsValue` values - Json
    */
   implicit def writeableOf_JsValue(implicit codec: Codec): Writeable[JsValue] = {
-    Writeable(jsval => codec.encode(jsval.toString))
+    Writeable(a => codec.encode(Json.stringify(a)))
   }
 
   /**
    * `Writeable` for empty responses.
    */
-  implicit val writeableOf_EmptyContent: Writeable[Results.EmptyContent] = Writeable(_ => Array.empty)
+  implicit val writeableOf_EmptyContent: Writeable[Results.EmptyContent] = new Writeable(_ => ByteString.empty, None)
 
   /**
    * Straightforward `Writeable` for String values.
@@ -101,7 +108,12 @@ trait DefaultWriteables extends LowPriorityWriteables {
   /**
    * Straightforward `Writeable` for Array[Byte] values.
    */
-  implicit val wBytes: Writeable[Array[Byte]] = Writeable(identity)
+  implicit val wByteArray: Writeable[Array[Byte]] = Writeable(bytes => ByteString(bytes))
+
+  /**
+   * Straightforward `Writeable` for ByteString values.
+   */
+  implicit val wBytes: Writeable[ByteString] = Writeable(identity)
 
 }
 

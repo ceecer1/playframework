@@ -1,0 +1,22 @@
+#! /bin/bash
+
+# Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
+
+. "$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )/build"
+
+cd $FRAMEWORK
+
+echo "[info]"
+echo "[info] ---- BUILDING PLAY"
+echo "[info]"
+build "$@" quickPublish publishLocal
+
+echo "[info]"
+echo "[info] ---- SCRIPTED TESTS"
+echo "[info]"
+
+build "$@" scripted
+
+echo "[info]"
+echo "[info] ALL TESTS PASSED"
+echo "[info]"

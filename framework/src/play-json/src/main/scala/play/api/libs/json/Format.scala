@@ -1,8 +1,9 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.libs.json
 import scala.annotation.implicitNotFound
+import play.api.libs.functional._
 
 /**
  * Json formatter: write an implicit to define both a serializer and a deserializer for any type.
@@ -15,15 +16,10 @@ trait OFormat[A] extends OWrites[A] with Reads[A] with Format[A]
 
 object OFormat {
 
-  import play.api.libs.functional._
-
   implicit def functionalCanBuildFormats(implicit rcb: FunctionalCanBuild[Reads], wcb: FunctionalCanBuild[OWrites]): FunctionalCanBuild[OFormat] = new FunctionalCanBuild[OFormat] {
 
     def apply[A, B](fa: OFormat[A], fb: OFormat[B]): OFormat[A ~ B] =
-      OFormat[A ~ B](
-        rcb(fa, fb),
-        wcb(fa, fb)
-      )
+      OFormat[A ~ B](rcb(fa, fb), wcb(fa, fb))
 
   }
 
@@ -58,13 +54,16 @@ object Format extends PathFormat with ConstraintFormat with DefaultFormat {
   val constraints: ConstraintFormat = this
   val path: PathFormat = this
 
-  def apply[A](fjs: Reads[A], tjs: Writes[A]): Format[A] = {
-    new Format[A] {
-      def reads(json: JsValue) = fjs.reads(json)
-      def writes(o: A) = tjs.writes(o)
+  implicit val invariantFunctorFormat: InvariantFunctor[Format] =
+    new InvariantFunctor[Format] {
+      def inmap[A, B](fa: Format[A], f1: A => B, f2: B => A) =
+        Format(fa.map(f1), Writes(b => fa.writes(f2(b))))
     }
-  }
 
+  def apply[A](fjs: Reads[A], tjs: Writes[A]): Format[A] = new Format[A] {
+    def reads(json: JsValue) = fjs.reads(json)
+    def writes(o: A) = tjs.writes(o)
+  }
 }
 
 /**

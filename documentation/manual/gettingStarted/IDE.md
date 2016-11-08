@@ -1,4 +1,4 @@
-<!--- Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com> -->
+<!--- Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com> -->
 # Setting up your preferred IDE
 
 Working with Play is easy. You don’t even need a sophisticated IDE, because Play compiles and refreshes the modifications you make to your source files automatically, so you can easily work using a simple text editor.
@@ -7,54 +7,61 @@ However, using a modern Java or Scala IDE provides cool productivity features li
 
 ## Eclipse
 
+### Setup sbteclipse
+
+Integration with Eclipse requires [sbteclipse](https://github.com/typesafehub/sbteclipse) 4.0.0 or newer.
+
+```scala
+addSbtPlugin("com.typesafe.sbteclipse" % "sbteclipse-plugin" % "4.0.0")
+```
+
+You must `compile` your project before running the `eclipse` command. You can force compilation to happen when the `eclipse` command is run by adding the following setting:
+
+```scala
+// Compile the project before generating Eclipse files, so that generated .scala or .class files for views and routes are present
+EclipseKeys.preTasks := Seq(compile in Compile)
+```
+
+If you have Scala sources in your project, you will need to install [Scala IDE](http://scala-ide.org/).
+
+If you do not want to install Scala IDE and have only Java sources in your project, then you can set the following:
+
+```scala
+EclipseKeys.projectFlavor := EclipseProjectFlavor.Java           // Java project. Don't expect Scala IDE
+EclipseKeys.createSrc := EclipseCreateSrc.ValueSet(EclipseCreateSrc.ManagedClasses, EclipseCreateSrc.ManagedResources)  // Use .class files instead of generated .scala files for views and routes
+```
+
 ### Generate configuration
 
-Play provides a command to simplify Eclipse configuration. To transform a Play application into a working Eclipse project, use the `eclipse` command:
+Play provides a command to simplify [Eclipse](https://eclipse.org/) configuration. To transform a Play application into a working Eclipse project, use the `eclipse` command:
 
-without the source jars:
-
-```
-[My first application] $ eclipse
+```bash
+[my-first-app] $ eclipse
 ```
 
-if you want to grab the available source jars (this will take longer and it's possible a few sources might be missing):
+If you want to grab the available source jars (this will take longer and it's possible a few sources might be missing):
 
+```bash
+[my-first-app] $ eclipse with-source=true
 ```
-[My first application] $ eclipse with-source=true
+
+> Note if you are using sub-projects with aggregate, you would need to set `skipParents` appropriately in `build.sbt`:
+
+```scala
+EclipseKeys.skipParents in ThisBuild := false
 ```
 
-> Note if you are using sub-projects with aggregate, you would need to set `skipParents` appropriately:
-
-```
-import com.typesafe.sbteclipse.core.EclipsePlugin.EclipseKeys
-
-object ApplicationBuild extends Build {
-
-  override def settings = super.settings ++ Seq(
-      EclipseKeys.skipParents in ThisBuild := false
-  )
-
-  ...
- 
-}
-```
 or from the play console, type:
 
-``` 
-[My first application] $ eclipse skip-parents=false
-```
-
-> Also, if you did not want to trigger a compilation before running `eclipse`, then just add the following to your settings:
-
-```
-EclipsePlugin.EclipseKeys.preTasks := Seq()
+```bash
+[my-first-app] $ eclipse skip-parents=false
 ```
 
 You then need to import the application into your Workspace with the **File/Import/General/Existing project…** menu (compile your project first).
 
-[[images/eclipse.png]] 
+[[images/eclipse.png]]
 
-To debug, start your application with `play debug run` and in Eclipse right-click on the project and select **Debug As**, **Debug Configurations**. In the **Debug Configurations** dialog, right-click on **Remote Java Application** and select **New**. Change **Port** to 9999 and click **Apply**. From now on you can click on **Debug** to connect to the running application. Stopping the debugging session will not stop the server.
+To debug, start your application with `sbt -jvm-debug 9999 run` and in Eclipse right-click on the project and select **Debug As**, **Debug Configurations**. In the **Debug Configurations** dialog, right-click on **Remote Java Application** and select **New**. Change **Port** to 9999 and click **Apply**. From now on you can click on **Debug** to connect to the running application. Stopping the debugging session will not stop the server.
 
 > **Tip**: You can run your application using `~run` to enable direct compilation on file change. This way scala template files are auto discovered when you create a new template in `view` and auto compiled when the file changes. If you use normal `run` then you have to hit `Refresh` on your browser each time.
 
@@ -66,95 +73,104 @@ The generated configuration files contain absolute references to your framework 
 
 ## IntelliJ
 
-### Generate configuration
+[Intellij IDEA](https://www.jetbrains.com/idea/) lets you quickly create a Play application without using a command prompt. You don't need to configure anything outside of the IDE, the SBT build tool takes care of downloading appropriate libraries, resolving dependencies and building the project.
 
-Play provides a command to simplify Intellij IDEA configuration. To transform a Play application into a working IDEA module, use the idea command from the play console:
+Before you start creating a Play application in IntelliJ IDEA, make sure that the latest [Scala Plugin](https://www.jetbrains.com/idea/help/creating-and-running-your-scala-application.html) is installed and enabled in IntelliJ IDEA. Even if you don't develop in Scala, it will help with the template engine and also resolving dependencies.
 
-without the source jars:
+To create a Play application:
 
-```
-[My first application] $ idea
-```
+1. Open ***New Project*** wizard, select ***Activator*** under ***Scala*** section and click ***Next***.
+2. Select one of the templates suitable. For the basic empty application you can select [Play Scala Seed](https://www.lightbend.com/activator/template/play-scala). The full list of templates can be found on [Lightbend Activator templates page](https://www.lightbend.com/activator/templates).
+3. Enter your project's information and click ***Finish***.
 
-if you want to grab the available source jars (this will take longer and it's possible a few sources might be missing):
+You can also import an existing Play project.
 
-```
-[My first application] $ idea with-sources=yes
-```
+To import a Play project:
 
-This will create the configuration files IntelliJ needs to open your play application as a project. The files are named <project>.iml and <project>-build.iml. The file menu (IntelliJ 11.1 CE) contains the Open Project command.
+1. Open Project wizard, select ***Import Project***.
+2. In the window that opens, select a project you want to import and click ***OK***.
+3. On the next page of the wizard, select ***Import project from external model*** option, choose ***SBT project*** and click ***Next***.
+4. On the next page of the wizard, select additional import options and click ***Finish***.
 
-> Tip: There is an [Intellij IDEA issue](http://devnet.jetbrains.net/thread/433870) regarding building Java based Play2 apps while having the Scala plugin installed. Until it's fixed, the recommended workaround is to disable the Scala plugin.
+Check the project's structure, make sure all necessary dependencies are downloaded. You can use code assistance, navigation and on-the-fly code analysis features.
 
-To debug, first add a debug configuration
+You can run the created application and view the result in the default browser `http://localhost:9000`. To run a Play application:
 
-- Open Run/Debug Configurations dialog, then click Run -> Edit Configurations
-- Add a Remote configuration, then select `Remote`
-- Configure it:
-    - Set a name
-    - Transport: Socket
-    - Debugger mode: Attach
-    - Host: localhost
-    - Port: 9999
-    - Select module you imported
-- Close dialog - click Apply
+1. Create a new Run Configuration -- From the main menu, select Run -> Edit Configurations
+2. Click on the + to add a new configuration
+3. From the list of configurations, choose "SBT Task"
+4. In the "tasks" input box, simply put "run"
+5. Apply changes and select OK.
+6. Now you can choose "Run" from the main Run menu and run your application
 
-Start play in debug mode (in a separate command line console, NOT in IDEA's Play console):
+You can easily start a debugger session for a Play application using default Run/Debug Configuration settings.
 
-```
-$ play debug
-```
+For more detailed information, see the Play Framework 2.x tutorial at the following URL:
 
-which should print: 
+<https://www.jetbrains.com/idea/help/getting-started-with-play-2-x.html>
 
-```
-Listening for transport dt_socket at address: 9999
-```
+### Navigate from an error page to the source code
 
-Set some breakpoints then start your new debug configuration from within IDEA. The console output should be:
+Using the `play.editor` configuration option, you can set up Play to add hyperlinks to an error page.  This will link to runtime exceptions thrown when Play is running development mode.
+
+You can easily navigate from error pages to IntelliJ directly into the source code, by using IntelliJ's "remote file" REST API with the built in IntelliJ web server on port 63342.
+
+Enable the following line in `application.conf` to provide hyperlinks:
 
 ```
-Connected to the target VM, address: 'localhost:9999', transport: 'socket'
+play.editor="http://localhost:63342/api/file/?file=%s&line=%s"
 ```
 
-Run the web app by executing the task `run` in the Play console. Finally, browse to `http://localhost:9000`. IntelliJ should stop at your breakpoint.
+You can also set play.editor from `build.sbt`:
 
-Alternatively, in order not to run more command prompts, first run "play debug run" in IDEA's Play console, then launch debug configuration.
+```
+fork := true // required for "sbt run" to pick up javaOptions
 
-If you make any important changes to your application, such as changing the classpath, use `idea` again to regenerate the configuration files.
+javaOptions += "-Dplay.editor=http://localhost:63342/api/file/?file=%s&line=%s"
+```
 
+or set the PLAY_EDITOR environment variable:
+
+```
+PLAY_EDITOR="http://localhost:63342/api/file/?file=%s&line=%s"
+```
 
 ## Netbeans
 
 ### Generate Configuration
 
-Play does not have native Netbeans project generation support at this time.
+Play does not have native [Netbeans](https://netbeans.org/) project generation support at this time, but there is a Scala plugin for NetBeans which can help with both Scala language and SBT:
 
+<https://github.com/dcaoyuan/nbscala>
+
+There is also a SBT plugin to create Netbeans project definition:
+
+<https://github.com/dcaoyuan/nbsbt>
 
 ## ENSIME
 
 ### Install ENSIME
 
-Follow the installation instructions at <https://github.com/aemoncannon/ensime>
+Follow the installation instructions at <https://github.com/ensime/ensime-emacs>.
 
 ### Generate configuration
 
-Edit your project/plugins.sbt file, and add the following line (you should first check <https://github.com/aemoncannon/ensime-sbt-cmd> for the latest version of the plugin):
+Edit your project/plugins.sbt file, and add the following line (you should first check <https://github.com/ensime/ensime-sbt> for the latest version of the plugin):
 
-```
-addSbtPlugin("org.ensime" % "ensime-sbt-cmd" % "0.1.0")
-```
-
-Start Play:
-
-```
-$ play
+```scala
+addSbtPlugin("org.ensime" % "ensime-sbt" % "0.2.3")
 ```
 
-Enter 'ensime generate' at the play console. The plugin should generate a .ensime file in the root of your Play project.
+Start SBT:
 
+```bash
+$ sbt
 ```
-$ [MYPROJECT] ensime generate
+
+Enter 'gen-ensime' at the play console. The plugin should generate a .ensime file in the root of your Play project.
+
+```bash
+[MYPROJECT] $ gen-ensime
 [info] Gathering project information...
 [info] Processing project: ProjectRef(file:/Users/aemon/projects/www/MYPROJECT/,MYPROJECT)...
 [info]  Reading setting: name...
@@ -189,31 +205,16 @@ $ [MYPROJECT] ensime generate
 
 From Emacs, execute M-x ensime and follow the on-screen instructions.
 
-That's all there is to it. You should now get type-checking, completion, etc. for your Play project. Note, if you add new library dependencies to your play project, you'll need to re-run "ensime generate" and re-launch ENSIME.
+That's all there is to it. You should now get type-checking, completion, etc. for your Play project. Note, if you add new library dependencies to your play project, you'll need to re-run "gen-ensime" and re-launch ENSIME.
 
 ### More Information
 
-Check out the ENSIME manual at <http://aemoncannon.github.com/ensime/index.html>
-If you have questions, post them in the ensime group at <https://groups.google.com/forum/?fromgroups=#!forum/ensime>
-
+Check out the ENSIME README at <https://github.com/ensime/ensime-emacs>. If you have questions, post them in the ensime group at <https://groups.google.com/forum/?fromgroups=#!forum/ensime>.
 
 ## All Scala Plugins if needed
 
-Scala is a newer programming language, so the functionality is provided in plugins rather than in the core IDE.
-
-- Eclipse Scala IDE: <http://scala-ide.org/>
-- NetBeans Scala Plugin: <https://java.net/projects/nbscala>
-- IntelliJ IDEA Scala Plugin: <http://confluence.jetbrains.net/display/SCA/Scala+Plugin+for+IntelliJ+IDEA>
-- IntelliJ IDEA's plugin is under active development, and so using the nightly build may give you additional functionality at the cost of some minor hiccups.
-- Nika (11.x) Plugin Repository: <http://www.jetbrains.com/idea/plugins/scala-nightly-nika.xml>
-- Leda (12.x) Plugin Repository: <http://www.jetbrains.com/idea/plugins/scala-nightly-leda.xml>
-- IntelliJ IDEA Play plugin (available only for Leda 12.x): <http://plugins.intellij.net/plugin/?idea&pluginId=7080>
-- ENSIME - Scala IDE Mode for Emacs: <https://github.com/aemoncannon/ensime>
+1. Eclipse Scala IDE: <http://scala-ide.org/>
+2. NetBeans Scala Plugin: <https://github.com/dcaoyuan/nbscala>
+3. IntelliJ IDEA Scala Plugin: <http://blog.jetbrains.com/scala/>
+4. ENSIME - Scala IDE Mode for Emacs: <https://github.com/aemoncannon/ensime>
 (see below for ENSIME/Play instructions)
-
-&nbsp;
-
-> **Next:** 
->
-> – [[Play for Scala developers|ScalaHome]]
-> – [[Play for Java developers|JavaHome]]

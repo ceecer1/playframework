@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.libs.openid
 
@@ -10,12 +10,14 @@ import org.mockito._
 import play.api.mvc.Request
 import play.api.http._
 import play.api.http.Status._
-import play.api.libs.openid.Errors.{BAD_RESPONSE, AUTH_ERROR}
+import play.api.libs.openid.Errors.{ BAD_RESPONSE, AUTH_ERROR }
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 import java.util.concurrent.TimeUnit
 
-object OpenIDSpec extends Specification with Mockito {
+import scala.concurrent.ExecutionContext.Implicits.global
+
+class OpenIDSpec extends Specification with Mockito {
 
   val claimedId = "http://example.com/openid?id=C123"
   val identity = "http://example.com/openid?id=C123&id"
@@ -23,7 +25,7 @@ object OpenIDSpec extends Specification with Mockito {
   val dur = Duration(10, TimeUnit.SECONDS)
 
   // 9.1 Request parameters - http://openid.net/specs/openid-authentication-2_0.html#anchor27
-  def isValidOpenIDRequest(query:Params) = {
+  def isValidOpenIDRequest(query: Params) = {
     query.get("openid.mode") must_== Some(Seq("checkid_setup"))
     query.get("openid.ns") must_== Some(Seq("http://specs.openid.net/auth/2.0"))
   }
@@ -31,14 +33,14 @@ object OpenIDSpec extends Specification with Mockito {
   "OpenID" should {
     "initiate discovery" in {
       val ws = createMockWithValidOpDiscoveryAndVerification
-      val openId = new OpenIDClient(ws.url)
+      val openId = new WsOpenIdClient(ws, new WsDiscovery(ws))
       openId.redirectURL("http://example.com", "http://foo.bar.com/openid")
       there was one(ws.request).get()
     }
 
     "generate a valid redirectUrl" in {
       val ws = createMockWithValidOpDiscoveryAndVerification
-      val openId = new OpenIDClient(ws.url)
+      val openId = new WsOpenIdClient(ws, new WsDiscovery(ws))
       val redirectUrl = Await.result(openId.redirectURL("http://example.com", "http://foo.bar.com/returnto"), dur)
 
       val query = parseQueryString(redirectUrl)
@@ -51,7 +53,7 @@ object OpenIDSpec extends Specification with Mockito {
 
     "generate a valid redirectUrl with a proper required extended attributes request" in {
       val ws = createMockWithValidOpDiscoveryAndVerification
-      val openId = new OpenIDClient(ws.url)
+      val openId = new WsOpenIdClient(ws, new WsDiscovery(ws))
       val redirectUrl = Await.result(openId.redirectURL("http://example.com", "http://foo.bar.com/returnto",
         axRequired = Seq("email" -> "http://schema.openid.net/contact/email")), dur)
 
@@ -67,7 +69,7 @@ object OpenIDSpec extends Specification with Mockito {
 
     "generate a valid redirectUrl with a proper 'if_available' extended attributes request" in {
       val ws = createMockWithValidOpDiscoveryAndVerification
-      val openId = new OpenIDClient(ws.url)
+      val openId = new WsOpenIdClient(ws, new WsDiscovery(ws))
       val redirectUrl = Await.result(openId.redirectURL("http://example.com", "http://foo.bar.com/returnto",
         axOptional = Seq("email" -> "http://schema.openid.net/contact/email")), dur)
 
@@ -83,7 +85,7 @@ object OpenIDSpec extends Specification with Mockito {
 
     "generate a valid redirectUrl with a proper 'if_available' AND required extended attributes request" in {
       val ws = createMockWithValidOpDiscoveryAndVerification
-      val openId = new OpenIDClient(ws.url)
+      val openId = new WsOpenIdClient(ws, new WsDiscovery(ws))
       val redirectUrl = Await.result(openId.redirectURL("http://example.com", "http://foo.bar.com/returnto",
         axRequired = Seq("first" -> "http://axschema.org/namePerson/first"),
         axOptional = Seq("email" -> "http://schema.openid.net/contact/email")), dur)
@@ -103,7 +105,7 @@ object OpenIDSpec extends Specification with Mockito {
     "verify the response" in {
       val ws = createMockWithValidOpDiscoveryAndVerification
 
-      val openId = new OpenIDClient(ws.url)
+      val openId = new WsOpenIdClient(ws, new WsDiscovery(ws))
 
       val responseQueryString = openIdResponse
       val userInfo = Await.result(openId.verifiedId(setupMockRequest(responseQueryString)), dur)
@@ -114,7 +116,7 @@ object OpenIDSpec extends Specification with Mockito {
 
       val argument = ArgumentCaptor.forClass(classOf[Params])
       "direct verification using a POST request was used" in {
-        there was one(ws.request).post(argument.capture())(any[Writeable[Params]], any[ContentTypeOf[Params]])
+        there was one(ws.request).post(argument.capture())(any[Writeable[Params]])
 
         val verificationQuery = argument.getValue
 
@@ -123,7 +125,7 @@ object OpenIDSpec extends Specification with Mockito {
         }
 
         "every query parameter apart from openid.mode is used in the verification request" in {
-          (verificationQuery - "openid.mode") forall { case (key,value) => responseQueryString.get(key) == Some(value) } must beTrue
+          (verificationQuery - "openid.mode") forall { case (key, value) => responseQueryString.get(key) == Some(value) } must beTrue
         }
       }
     }
@@ -134,7 +136,7 @@ object OpenIDSpec extends Specification with Mockito {
     // Claimed Identifier in the response to make sure that the OP is authorized to make assertions about the Claimed Identifier.
     "verify the response using discovery on the claimed Identifier" in {
       val ws = createMockWithValidOpDiscoveryAndVerification
-      val openId = new OpenIDClient(ws.url)
+      val openId = new WsOpenIdClient(ws, new WsDiscovery(ws))
 
       val spoofedEndpoint = "http://evilhackerendpoint.com"
       val responseQueryString = openIdResponse - "openid.op_endpoint" + ("openid.op_endpoint" -> Seq(spoofedEndpoint))
@@ -142,7 +144,7 @@ object OpenIDSpec extends Specification with Mockito {
       Await.result(openId.verifiedId(setupMockRequest(responseQueryString)), dur)
 
       "direct verification does not use the openid.op_endpoint that is part of the query string" in {
-        ws.urls contains(spoofedEndpoint) must beFalse
+        ws.urls contains (spoofedEndpoint) must beFalse
       }
       "the endpoint is resolved using discovery on the claimed Id" in {
         ws.urls(0) must be equalTo claimedId
@@ -152,7 +154,7 @@ object OpenIDSpec extends Specification with Mockito {
           // Use discovery to resolve the endpoint
           one(ws.request).get()
           // Verify the response
-          one(ws.request).post(any[Params])(any[Writeable[Params]], any[ContentTypeOf[Params]])
+          one(ws.request).post(any[Params])(any[Writeable[Params]])
         }
       }
       "use direct verification on the discovered endpoint" in {
@@ -168,11 +170,11 @@ object OpenIDSpec extends Specification with Mockito {
       ws.response.xml returns scala.xml.XML.loadString(readFixture("discovery/xrds/simple-op.xml"))
       ws.response.body returns "is_valid:false\n"
 
-      val openId = new OpenIDClient(ws.url)
+      val openId = new WsOpenIdClient(ws, new WsDiscovery(ws))
 
       Await.result(openId.verifiedId(setupMockRequest()), dur) must throwA[AUTH_ERROR.type]
 
-      there was one(ws.request).post(any[Params])(any[Writeable[Params]], any[ContentTypeOf[Params]])
+      there was one(ws.request).post(any[Params])(any[Writeable[Params]])
     }
 
     "fail response verification if the response indicates an error" in {
@@ -183,7 +185,7 @@ object OpenIDSpec extends Specification with Mockito {
       ws.response.xml returns scala.xml.XML.loadString(readFixture("discovery/xrds/simple-op.xml"))
       ws.response.body returns "is_valid:false\n"
 
-      val openId = new OpenIDClient(ws.url)
+      val openId = new WsOpenIdClient(ws, new WsDiscovery(ws))
 
       val errorResponse = (openIdResponse - "openid.mode") + ("openid.mode" -> Seq("error"))
 
@@ -193,7 +195,7 @@ object OpenIDSpec extends Specification with Mockito {
     // OpenID 1.1 compatibility - 14.2.1
     "verify an OpenID 1.1 response that is missing the \"openid.op_endpoint\" parameter" in {
       val ws = createMockWithValidOpDiscoveryAndVerification
-      val openId = new OpenIDClient(ws.url)
+      val openId = new WsOpenIdClient(ws, new WsDiscovery(ws))
 
       val responseQueryString = (openIdResponse - "openid.op_endpoint")
 
@@ -208,7 +210,7 @@ object OpenIDSpec extends Specification with Mockito {
           // Use discovery to resolve the endpoint
           one(ws.request).get()
           // Verify the response
-          one(ws.request).post(any[Params])(any[Writeable[Params]], any[ContentTypeOf[Params]])
+          one(ws.request).post(any[Params])(any[Writeable[Params]])
         }
       }
     }
@@ -223,7 +225,7 @@ object OpenIDSpec extends Specification with Mockito {
     ws
   }
 
-  def setupMockRequest(queryString:Params = openIdResponse) = {
+  def setupMockRequest(queryString: Params = openIdResponse) = {
     val request = mock[Request[_]]
     request.queryString returns queryString
     request

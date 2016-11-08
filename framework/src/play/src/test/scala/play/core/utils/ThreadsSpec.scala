@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.core.utils
 
@@ -7,7 +7,7 @@ import util.control.Exception._
 import org.specs2.mutable.Specification
 import play.utils.Threads
 
-object ThreadsSpec extends Specification {
+class ThreadsSpec extends Specification {
   "Threads" should {
     "restore the correct class loader" in {
       "if the block returns successfully" in {
@@ -29,5 +29,5 @@ object ThreadsSpec extends Specification {
       }
     }
   }
-  val testClassLoader = new ClassLoader(){}
+  val testClassLoader = new ClassLoader() {}
 }

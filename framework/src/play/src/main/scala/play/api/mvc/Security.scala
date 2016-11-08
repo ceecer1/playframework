@@ -1,13 +1,15 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.mvc
 
 import play.api._
+import play.api.libs.streams.Accumulator
 import play.api.mvc.Results._
 
-import play.api.libs.iteratee._
+import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
+import scala.language.reflectiveCalls
 
 /**
  * Helpers to create secure actions.
@@ -42,13 +44,13 @@ object Security {
    */
   def Authenticated[A](
     userinfo: RequestHeader => Option[A],
-    onUnauthorized: RequestHeader => SimpleResult)(action: A => EssentialAction): EssentialAction = {
+    onUnauthorized: RequestHeader => Result)(action: A => EssentialAction): EssentialAction = {
 
     EssentialAction { request =>
       userinfo(request).map { user =>
         action(user)(request)
       }.getOrElse {
-        Done(onUnauthorized(request), Input.Empty)
+        Accumulator.done(onUnauthorized(request))
       }
     }
 
@@ -57,7 +59,8 @@ object Security {
   /**
    * Key of the username attribute stored in session.
    */
-  lazy val username: String = Play.maybeApplication.flatMap(_.configuration.getString("session.username")) getOrElse ("username")
+  lazy val username: String =
+    Play.privateMaybeApplication.flatMap(_.configuration.getOptional[String]("session.username")) getOrElse "username"
 
   /**
    * Wraps another action, allowing only authenticated HTTP requests.
@@ -90,7 +93,9 @@ object Security {
    *
    * @param user The user that made the request
    */
-  class AuthenticatedRequest[A, U](val user: U, request: Request[A]) extends WrappedRequest[A](request)
+  class AuthenticatedRequest[A, U](val user: U, request: Request[A]) extends WrappedRequest[A](request) {
+    override protected def newWrapper[B](newRequest: Request[B]): AuthenticatedRequest[B, U] = new AuthenticatedRequest[B, U](user, newRequest)
+  }
 
   /**
    * An authenticated action builder.
@@ -115,7 +120,7 @@ object Security {
    *                                 request: Request[A]) extends WrappedRequest[A](request)
    *
    * object Authenticated extends ActionBuilder[AuthenticatedDbRequest] {
-   *   def invokeBlock[A](request: Request[A], block: (AuthenticatedDbRequest[A]) => Future[SimpleResult]) = {
+   *   def invokeBlock[A](request: Request[A], block: (AuthenticatedDbRequest[A]) => Future[Result]) = {
    *     AuthenticatedBuilder(req => getUserFromRequest(req)).authenticate(request, { authRequest: AuthenticatedRequest[A, User] =>
    *       DB.withConnection { conn =>
    *         block(new AuthenticatedDbRequest[A](authRequest.user, conn, request))
@@ -128,17 +133,20 @@ object Security {
    * @param userinfo The function that looks up the user info.
    * @param onUnauthorized The function to get the result for when no authenticated user can be found.
    */
-  class AuthenticatedBuilder[U](userinfo: RequestHeader => Option[U],
-    onUnauthorized: RequestHeader => SimpleResult = _ => Unauthorized(views.html.defaultpages.unauthorized()))
-      extends ActionBuilder[({ type R[A] = AuthenticatedRequest[A, U] })#R] {
+  class AuthenticatedBuilder[U](
+      userinfo: RequestHeader => Option[U],
+      defaultParser: BodyParser[AnyContent],
+      onUnauthorized: RequestHeader => Result = _ => Unauthorized(views.html.defaultpages.unauthorized()))(implicit val executionContext: ExecutionContext) extends ActionBuilder[({ type R[A] = AuthenticatedRequest[A, U] })#R, AnyContent] {
 
-    def invokeBlock[A](request: Request[A], block: (AuthenticatedRequest[A, U]) => Future[SimpleResult]) =
+    lazy val parser = defaultParser
+
+    def invokeBlock[A](request: Request[A], block: (AuthenticatedRequest[A, U]) => Future[Result]) =
       authenticate(request, block)
 
     /**
      * Authenticate the given block.
      */
-    def authenticate[A](request: Request[A], block: (AuthenticatedRequest[A, U]) => Future[SimpleResult]) = {
+    def authenticate[A](request: Request[A], block: (AuthenticatedRequest[A, U]) => Future[Result]) = {
       userinfo(request).map { user =>
         block(new AuthenticatedRequest(user, request))
       } getOrElse {
@@ -165,16 +173,14 @@ object Security {
    * It can also be used from an action builder, for example:
    *
    * {{{
-   * class AuthenticatedDbRequest[A](val user: User,
-   *                                 val conn: Connection,
-   *                                 request: Request[A]) extends WrappedRequest[A](request)
+   * class AuthMessagesRequest[A](val user: User,
+   *                               messagesApi: MessagesApi,
+   *                               request: Request[A]) extends WrappedRequest[A](request)
    *
-   * object Authenticated extends ActionBuilder[AuthenticatedDbRequest] {
-   *   def invokeBlock[A](request: Request[A], block: (AuthenticatedDbRequest[A]) => Future[SimpleResult]) = {
+   * class Authenticated @Inject()(messagesApi: MessagesApi) extends ActionBuilder[AuthMessagesRequest] {
+   *   def invokeBlock[A](request: Request[A], block: (AuthMessagesRequest[A]) => Future[Result]) = {
    *     AuthenticatedBuilder(req => getUserFromRequest(req)).authenticate(request, { authRequest: AuthenticatedRequest[A, User] =>
-   *       DB.withConnection { conn =>
-   *         block(new AuthenticatedDbRequest[A](authRequest.user, conn, request))
-   *       }
+   *         block(new AuthenticatedDbRequest[A](authRequest.user, messagesApi, request))
    *     })
    *   }
    * }
@@ -188,13 +194,19 @@ object Security {
      * @param userinfo The function that looks up the user info.
      * @param onUnauthorized The function to get the result for when no authenticated user can be found.
      */
-    def apply[U](userinfo: RequestHeader => Option[U],
-      onUnauthorized: RequestHeader => SimpleResult = _ => Unauthorized(views.html.defaultpages.unauthorized())): AuthenticatedBuilder[U] = new AuthenticatedBuilder(userinfo, onUnauthorized)
+    def apply[U](
+      userinfo: RequestHeader => Option[U],
+      defaultParser: BodyParser[AnyContent],
+      onUnauthorized: RequestHeader => Result = _ => Unauthorized(views.html.defaultpages.unauthorized()))(implicit ec: ExecutionContext): AuthenticatedBuilder[U] = {
+      new AuthenticatedBuilder(userinfo, defaultParser, onUnauthorized)
+    }
 
     /**
      * Simple authenticated action builder that looks up the username from the session
      */
-    def apply(): AuthenticatedBuilder[String] = apply[String](req => req.session.get(username))
+    def apply(defaultParser: BodyParser[AnyContent])(implicit ec: ExecutionContext): AuthenticatedBuilder[String] = {
+      apply[String](req => req.session.get(username), defaultParser)
+    }
   }
 }
 

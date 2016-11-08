@@ -1,172 +1,61 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.core.j
 
-import play.api.mvc._
-import play.api.libs.json._
-import play.api.libs.Files.{ TemporaryFile }
+import java.io.File
+import java.util.concurrent.{ CompletionStage, Executor }
 
-import scala.xml._
+import play.api.libs.Files.TemporaryFile
+
+import akka.stream.Materializer
+
 import scala.collection.JavaConverters._
+import play.api.mvc._
 
 /**
  * provides Java centric BodyParsers
  */
-object JavaParsers extends BodyParsers {
+object JavaParsers {
 
-  import play.mvc.Http.{ RequestBody }
+  // Java code can't access objects defined on traits, so we use this instead
+  @deprecated("Inject PlayBodyParsers instead", "2.6.0")
+  val parse = BodyParsers.parse
 
-  case class DefaultRequestBody(
-      urlFormEncoded: Option[Map[String, Seq[String]]] = None,
-      raw: Option[RawBuffer] = None,
-      text: Option[String] = None,
-      json: Option[JsValue] = None,
-      xml: Option[NodeSeq] = None,
-      multipart: Option[MultipartFormData[TemporaryFile]] = None,
-      override val isMaxSizeExceeded: Boolean = false) extends RequestBody {
-
-    override lazy val asFormUrlEncoded = {
-      urlFormEncoded.map(_.mapValues(_.toArray).asJava).orNull
+  def toJavaMultipartFormData[A](multipart: MultipartFormData[TemporaryFile]): play.mvc.Http.MultipartFormData[File] = {
+    new play.mvc.Http.MultipartFormData[File] {
+      lazy val asFormUrlEncoded = {
+        multipart.asFormUrlEncoded.mapValues(_.toArray).asJava
+      }
+      lazy val getFiles = {
+        multipart.files.map { file =>
+          new play.mvc.Http.MultipartFormData.FilePart(
+            file.key, file.filename, file.contentType.orNull, file.ref.file)
+        }.asJava
+      }
     }
+  }
 
-    override def asRaw = {
-      raw.map { rawBuffer =>
-        new play.mvc.Http.RawBuffer {
-          def size = rawBuffer.size
-          def asBytes(maxLength: Int) = rawBuffer.asBytes(maxLength).orNull
-          def asBytes = rawBuffer.asBytes().orNull
-          def asFile = rawBuffer.asFile
-          override def toString = rawBuffer.toString
-        }
-      }.orNull
+  def toJavaRaw(rawBuffer: RawBuffer): play.mvc.Http.RawBuffer = {
+    new play.mvc.Http.RawBuffer {
+      def size = rawBuffer.size
+      def asBytes(maxLength: Int) = rawBuffer.asBytes(maxLength).orNull
+      def asBytes = rawBuffer.asBytes().orNull
+      def asFile = rawBuffer.asFile
+      override def toString = rawBuffer.toString
     }
-
-    override def asText = {
-      text.orNull
-    }
-
-    override lazy val asJson = {
-      json.map { json =>
-        play.libs.Json.parse(json.toString)
-      }.orNull
-    }
-
-    override lazy val asXml = {
-      xml.map { xml =>
-        play.libs.XML.fromString(xml.toString)
-      }.orNull
-    }
-
-    override lazy val asMultipartFormData = {
-      multipart.map { multipart =>
-
-        new play.mvc.Http.MultipartFormData {
-
-          lazy val asFormUrlEncoded = {
-            multipart.asFormUrlEncoded.mapValues(_.toArray).asJava
-          }
-
-          lazy val getFiles = {
-            multipart.files.map { file =>
-              new play.mvc.Http.MultipartFormData.FilePart(
-                file.key, file.filename, file.contentType.orNull, file.ref.file)
-            }.asJava
-          }
-
-        }
-
-      }.orNull
-    }
-
   }
 
-  def anyContent(maxLength: Int): BodyParser[RequestBody] = parse.maxLength(orDefault(maxLength), parse.anyContent).map {
-    _.fold(
-      _ => DefaultRequestBody(isMaxSizeExceeded = true),
-      anyContent =>
-        DefaultRequestBody(
-          anyContent.asFormUrlEncoded,
-          anyContent.asRaw,
-          anyContent.asText,
-          anyContent.asJson,
-          anyContent.asXml,
-          anyContent.asMultipartFormData)
-    )
-  }
+  def trampoline: Executor = play.core.Execution.Implicits.trampoline
 
-  def json(maxLength: Int): BodyParser[RequestBody] = parse.maxLength(orDefault(maxLength), parse.json(Integer.MAX_VALUE)).map {
-    _.fold(
-      _ => DefaultRequestBody(isMaxSizeExceeded = true),
-      json =>
-        DefaultRequestBody(json = Some(json))
-    )
-  }
+  /**
+   * Flattens the completion of body parser.
+   *
+   * @param underlying The completion stage of body parser.
+   * @param materializer The stream materializer
+   * @return A body parser
+   */
+  def flatten[A](underlying: CompletionStage[play.mvc.BodyParser[A]], materializer: Materializer): play.mvc.BodyParser[A] = new Flattened[A](underlying, materializer)
 
-  def tolerantJson(maxLength: Int): BodyParser[RequestBody] = parse.maxLength(orDefault(maxLength), parse.tolerantJson(Integer.MAX_VALUE)).map {
-    _.fold(
-      _ => DefaultRequestBody(isMaxSizeExceeded = true),
-      json =>
-        DefaultRequestBody(json = Some(json))
-    )
-  }
-
-  def xml(maxLength: Int): BodyParser[RequestBody] = parse.maxLength(orDefault(maxLength), parse.xml(Integer.MAX_VALUE)).map {
-    _.fold(
-      _ => DefaultRequestBody(isMaxSizeExceeded = true),
-      xml =>
-        DefaultRequestBody(xml = Some(xml))
-    )
-  }
-
-  def tolerantXml(maxLength: Int): BodyParser[RequestBody] = parse.maxLength(orDefault(maxLength), parse.tolerantXml(Integer.MAX_VALUE)).map {
-    _.fold(
-      _ => DefaultRequestBody(isMaxSizeExceeded = true),
-      xml =>
-        DefaultRequestBody(xml = Some(xml))
-    )
-  }
-
-  def text(maxLength: Int): BodyParser[RequestBody] = parse.maxLength(orDefault(maxLength), parse.text(Integer.MAX_VALUE)).map {
-    _.fold(
-      _ => DefaultRequestBody(isMaxSizeExceeded = true),
-      text =>
-        DefaultRequestBody(text = Some(text))
-    )
-  }
-
-  def tolerantText(maxLength: Int): BodyParser[RequestBody] = parse.maxLength(orDefault(maxLength), parse.tolerantText(Integer.MAX_VALUE)).map {
-    _.fold(
-      _ => DefaultRequestBody(isMaxSizeExceeded = true),
-      text =>
-        DefaultRequestBody(text = Some(text))
-    )
-  }
-
-  def formUrlEncoded(maxLength: Int): BodyParser[RequestBody] = parse.maxLength(orDefault(maxLength), parse.urlFormEncoded(Integer.MAX_VALUE)).map {
-    _.fold(
-      _ => DefaultRequestBody(isMaxSizeExceeded = true),
-      urlFormEncoded =>
-        DefaultRequestBody(urlFormEncoded = Some(urlFormEncoded))
-    )
-  }
-
-  def multipartFormData(maxLength: Int): BodyParser[RequestBody] = parse.maxLength(orDefault(maxLength), parse.multipartFormData).map {
-    _.fold(
-      _ => DefaultRequestBody(isMaxSizeExceeded = true),
-      multipart =>
-        DefaultRequestBody(multipart = Some(multipart))
-    )
-  }
-
-  def raw(maxLength: Int): BodyParser[RequestBody] = parse.maxLength(orDefault(maxLength), parse.raw).map { body =>
-    body
-      .left.map(_ => DefaultRequestBody(isMaxSizeExceeded = true))
-      .right.map { raw =>
-        DefaultRequestBody(raw = Some(raw))
-      }.fold(identity, identity)
-  }
-
-  private def orDefault(maxLength: Int) = if (maxLength < 0) BodyParsers.parse.DEFAULT_MAX_TEXT_LENGTH else maxLength
-
+  private class Flattened[A](underlying: CompletionStage[play.mvc.BodyParser[A]], materializer: Materializer) extends play.mvc.BodyParser.CompletableBodyParser[A](underlying, materializer) {}
 }

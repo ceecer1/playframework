@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.api.libs
 
@@ -11,12 +11,12 @@ object Collections {
   /**
    * Produces a Seq from a seed and a function.
    *
-   * Example, produces a List from 0 to 100.
+   * Example, produces a List from 100 to 0.
    *
    * {{{
-   * unfoldLeft(0) { state match
+   * unfoldLeft(0) {
    *   case a if a > 100 => None
-   *   case a => (a + 1, a + 1)
+   *   case a => Some((a + 1, a))
    * }
    * }}}
    *

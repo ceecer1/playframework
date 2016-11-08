@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2016 Lightbend Inc. <https://www.lightbend.com>
  */
 package play.core
 
@@ -15,7 +15,7 @@ package play.core
  * After being closed, the value cannot be initialized again. ClosableLazy is designed
  * to make it easier to clean up resources when shutting down Play. If resources were able
  * to be reinitialized after closing, then it would be easy to accidentally allocate resources
- * when shutting down. To prevert reinitialization, galling the `get()` method after `close()`
+ * when shutting down. To prevent reinitialization, galling the `get()` method after `close()`
  * will result in an `IllegalStateException`.
  *
  * The performance of this class should be similar to Scala's lazy values. Once initialized,
@@ -23,31 +23,17 @@ package play.core
  * then initialization occurs, Initialization is synchronized on the ClosableLazy object.
  *
  * This class exposes `T` as the type of value that is lazily created. Subclasses
- * should implement the `create()` method to create this value. This method returns
- * that value along with a second value representing the resource that must be closed.
- * The resource might be the same as the main value but it can also be different. E.g.
- * the public value might be an ExecutionContext, but the type of value to close might
- * be the ExecutorService that the ExecutionContext warps.
+ * should implement the `create()` method to create this value. The `create()` method
+ * also returns a function that will be called when `close()` is called. This allows
+ * any resources associated with the value to be closed.
  */
-private[play] abstract class ClosableLazy[T <: AnyRef] {
+private[play] abstract class ClosableLazy[T >: Null <: AnyRef, C] {
 
-  /**
-   * The type of resource to close when `close()` is called. May be different
-   * from the type of T.
-   */
-  protected type ResourceToClose <: AnyRef
-  /**
-   * The result of calling the `create()` method.
-   *
-   * @param value The value that has been initialized.
-   * @param resourceToClose A resource that has been allocated. This resource will be
-   * passed to `close(ResourceToClose)`  when `close()` is called.
-   */
-  protected case class CreateResult(value: T, resourceToClose: ResourceToClose)
+  protected type CloseFunction = (() => C)
 
   @volatile
-  private var value: AnyRef = null
-  private var resourceToClose: AnyRef = null
+  private var value: T = null
+  private var closeFunction: CloseFunction = null
   private var hasBeenClosed: Boolean = false
 
   /**
@@ -58,16 +44,20 @@ private[play] abstract class ClosableLazy[T <: AnyRef] {
    */
   final def get(): T = {
     val currentValue = value
-    if (currentValue != null) return currentValue.asInstanceOf[T]
+    if (currentValue != null) return currentValue
     synchronized {
       if (hasBeenClosed) throw new IllegalStateException("Can't get ClosableLazy value after it has been closed")
       if (value == null) {
-        val result = create()
-        if (result.value == null) throw new IllegalStateException("Can't initialize ClosableLazy to null value")
-        value = result.value
-        resourceToClose = result.resourceToClose
+        val (v, cf): (T, CloseFunction) = create()
+        if (v == null) throw new IllegalStateException("Can't initialize ClosableLazy to a null value")
+        if (cf == null) throw new IllegalStateException("Can't initialize ClosableLazy's close function to a null value")
+        value = v
+        closeFunction = cf
+        v
+      } else {
+        // Value was initialized by another thread before we got the monitor
+        value
       }
-      value.asInstanceOf[T]
     }
   }
 
@@ -75,28 +65,40 @@ private[play] abstract class ClosableLazy[T <: AnyRef] {
    * Close the value. Calling this method is safe, but does nothing, if the value
    * has not been initialized.
    */
-  final def close(): Unit = {
-    synchronized {
-      if (!hasBeenClosed && value != null) {
-        val cachedCloseInfo = resourceToClose.asInstanceOf[ResourceToClose]
-        value = null
+  final def close(): C = {
+    val optionalClose: Option[CloseFunction] = synchronized {
+      if (hasBeenClosed) {
+        // Already closed
+        None
+      } else if (value == null) {
+        // Close before first call to get
         hasBeenClosed = true
-        resourceToClose = null
-        close(cachedCloseInfo)
+        None
+      } else {
+        // Close and call the close function
+        hasBeenClosed = true
+        val prevCloseFunction = closeFunction
+        value = null
+        closeFunction = null
+        Some(prevCloseFunction)
       }
     }
-
+    // Perform actual close outside the synchronized block,
+    // just in case the close function calls get or close
+    // from another thread.
+    optionalClose.fold(closeNotNeeded)(_.apply())
   }
 
   /**
-   * Called when the lazy value is first initialized. Returns the value, and the
-   * resource to close when `close()` is called.
+   * Called when the lazy value is first initialized. Returns the value and
+   * a function to close the value when `close` is called.
    */
-  protected def create(): CreateResult
+  protected def create(): (T, CloseFunction)
 
   /**
-   * Called when `close()` is called. Passed the resource that was originally
-   * returned when `create()` was called.
+   * Called when `close` is called but no closing actually needs to
+   * happen. Used to return a valid value of `C` when this happens.
+   * In common usage this method will return `()` or `Future.successful(())`.
    */
-  protected def close(resourceToClose: ResourceToClose)
+  protected def closeNotNeeded: C
 }
